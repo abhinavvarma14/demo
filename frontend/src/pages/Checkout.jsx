@@ -49,7 +49,7 @@ function Checkout() {
       const paymentRes = await API.post(`/payment/create/${order_id}`)
 
       const options = {
-        key: "rzp_test_SNBhRNnAER1BwS",
+        key: paymentRes.data.key_id,
         amount: paymentRes.data.amount,
         currency: "INR",
         name: "BatPrint",

@@ -20,11 +20,28 @@ load_dotenv()
 from . import models, schemas
 from .database import SessionLocal, engine
 
-SECRET_KEY = os.getenv("SECRET_KEY")
-ALGORITHM = os.getenv("ALGORITHM")
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES"))
-RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID")
-RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET")
+def get_required_env(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(f"Missing required environment variable: {name}")
+    return value
+
+
+SECRET_KEY = get_required_env("SECRET_KEY")
+ALGORITHM = get_required_env("ALGORITHM")
+ACCESS_TOKEN_EXPIRE_MINUTES = int(get_required_env("ACCESS_TOKEN_EXPIRE_MINUTES"))
+RAZORPAY_KEY_ID = get_required_env("RAZORPAY_KEY_ID")
+RAZORPAY_KEY_SECRET = get_required_env("RAZORPAY_KEY_SECRET")
+WEBHOOK_SECRET = get_required_env("WEBHOOK_SECRET")
+
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ORIGINS",
+        os.getenv("FRONTEND_URL", "http://localhost:5173,http://127.0.0.1:5173"),
+    ).split(",")
+    if origin.strip()
+]
 
 UPLOAD_DIR = Path("app/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -40,7 +57,7 @@ app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -798,7 +815,10 @@ def create_payment(
     )
     order.razorpay_order_id = razorpay_order["id"]
     db.commit()
-    return razorpay_order
+    return {
+        **razorpay_order,
+        "key_id": RAZORPAY_KEY_ID,
+    }
 
 
 @app.post("/payment/verify")
