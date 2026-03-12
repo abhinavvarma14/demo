@@ -1,0 +1,904 @@
+import os
+import shutil
+import uuid
+from datetime import datetime, timedelta
+from pathlib import Path
+
+import razorpay
+from dotenv import load_dotenv
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.staticfiles import StaticFiles
+from jose import JWTError, jwt
+from passlib.context import CryptContext
+from sqlalchemy import inspect, text
+from sqlalchemy.orm import Session, joinedload
+
+load_dotenv()
+
+from . import models, schemas
+from .database import SessionLocal, engine
+
+SECRET_KEY = os.getenv("SECRET_KEY")
+ALGORITHM = os.getenv("ALGORITHM")
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES"))
+RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID")
+RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET")
+
+UPLOAD_DIR = Path("app/uploads")
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+
+models.Base.metadata.create_all(bind=engine)
+
+app = FastAPI(title="Batman Printing Backend")
+app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+def create_access_token(data: dict):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db)
+):
+    credentials_exception = HTTPException(status_code=401, detail="Invalid authentication")
+
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("sub")
+        if user_id is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+
+    user = db.query(models.User).filter(models.User.id == int(user_id)).first()
+    if user is None:
+        raise credentials_exception
+
+    return user
+
+
+def require_admin(current_user: models.User):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+
+
+def normalize_mode(value: str | None):
+    if not value:
+        return None
+    normalized = value.strip().lower().replace("&", "and").replace(" ", "_")
+    mapping = {
+        "black_and_white": "black_white",
+        "blackwhite": "black_white",
+        "bw": "black_white",
+        "black_white": "black_white",
+        "color": "color",
+        "colour": "color",
+    }
+    return mapping.get(normalized, normalized)
+
+
+def normalize_print_type(value: str | None):
+    if not value:
+        return None
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    mapping = {
+        "single_side": "single",
+        "single": "single",
+        "double_side": "double",
+        "double": "double",
+    }
+    return mapping.get(normalized, normalized)
+
+
+def sync_schema():
+    inspector = inspect(engine)
+    expected_columns = {
+        "uploads": {
+            "stored_filename": "ALTER TABLE uploads ADD COLUMN stored_filename VARCHAR",
+            "original_filename": "ALTER TABLE uploads ADD COLUMN original_filename VARCHAR",
+            "mode": "ALTER TABLE uploads ADD COLUMN mode VARCHAR",
+            "created_at": "ALTER TABLE uploads ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+        },
+        "cart_items": {
+            "book_id": "ALTER TABLE cart_items ADD COLUMN book_id INTEGER",
+            "upload_id": "ALTER TABLE cart_items ADD COLUMN upload_id INTEGER",
+            "mode": "ALTER TABLE cart_items ADD COLUMN mode VARCHAR",
+            "print_type": "ALTER TABLE cart_items ADD COLUMN print_type VARCHAR",
+            "item_name": "ALTER TABLE cart_items ADD COLUMN item_name VARCHAR",
+            "unit_price": "ALTER TABLE cart_items ADD COLUMN unit_price FLOAT DEFAULT 0",
+            "total_price": "ALTER TABLE cart_items ADD COLUMN total_price FLOAT DEFAULT 0",
+        },
+        "order_items": {
+            "book_id": "ALTER TABLE order_items ADD COLUMN book_id INTEGER",
+            "upload_id": "ALTER TABLE order_items ADD COLUMN upload_id INTEGER",
+            "item_name": "ALTER TABLE order_items ADD COLUMN item_name VARCHAR",
+            "stored_filename": "ALTER TABLE order_items ADD COLUMN stored_filename VARCHAR",
+            "original_filename": "ALTER TABLE order_items ADD COLUMN original_filename VARCHAR",
+            "total_pages": "ALTER TABLE order_items ADD COLUMN total_pages INTEGER",
+            "mode": "ALTER TABLE order_items ADD COLUMN mode VARCHAR",
+            "print_type": "ALTER TABLE order_items ADD COLUMN print_type VARCHAR",
+            "unit_price": "ALTER TABLE order_items ADD COLUMN unit_price FLOAT DEFAULT 0",
+            "total_price": "ALTER TABLE order_items ADD COLUMN total_price FLOAT DEFAULT 0",
+        },
+    }
+
+    with engine.begin() as connection:
+        for table_name, ddl_map in expected_columns.items():
+            if table_name not in inspector.get_table_names():
+                continue
+            existing = {column["name"] for column in inspector.get_columns(table_name)}
+            for column_name, ddl in ddl_map.items():
+                if column_name not in existing:
+                    connection.execute(text(ddl))
+
+
+def seed_defaults():
+    db = SessionLocal()
+    try:
+        if db.query(models.PrintPricing).count() == 0:
+            db.add_all(
+                [
+                    models.PrintPricing(mode="black_white", print_type="single", price_per_page=2.0),
+                    models.PrintPricing(mode="black_white", print_type="double", price_per_page=1.5),
+                    models.PrintPricing(mode="color", print_type="single", price_per_page=5.0),
+                    models.PrintPricing(mode="color", print_type="double", price_per_page=4.0),
+                ]
+            )
+
+        if db.query(models.Book).count() == 0:
+            samples = [
+                ("Engineering Math", "Y24", 120.0),
+                ("Physics", "Y24", 100.0),
+                ("Chemistry", "Y25", 140.0),
+                ("Mechanics", "Y25", 110.0),
+            ]
+            for name, year, base_price in samples:
+                book = models.Book(name=name, year=year, is_active=True)
+                db.add(book)
+                db.flush()
+                db.add_all(
+                    [
+                        models.BookOption(book_id=book.id, mode="black_white", print_type="single", price=base_price),
+                        models.BookOption(book_id=book.id, mode="black_white", print_type="double", price=base_price - 10),
+                        models.BookOption(book_id=book.id, mode="color", print_type="single", price=base_price + 60),
+                        models.BookOption(book_id=book.id, mode="color", print_type="double", price=base_price + 40),
+                    ]
+                )
+        db.commit()
+    finally:
+        db.close()
+
+
+@app.on_event("startup")
+def startup():
+    models.Base.metadata.create_all(bind=engine)
+    sync_schema()
+    seed_defaults()
+
+
+def get_pdf_pricing_rule(db: Session, mode: str, print_type: str):
+    rule = (
+        db.query(models.PrintPricing)
+        .filter(
+            models.PrintPricing.mode == normalize_mode(mode),
+            models.PrintPricing.print_type == normalize_print_type(print_type),
+            models.PrintPricing.is_active.is_(True),
+        )
+        .first()
+    )
+    if not rule:
+        raise HTTPException(status_code=404, detail="Pricing rule not found")
+    return rule
+
+
+def get_book_option(db: Session, book_id: int, mode: str, print_type: str):
+    option = (
+        db.query(models.BookOption)
+        .filter(
+            models.BookOption.book_id == book_id,
+            models.BookOption.mode == mode.strip(),
+            models.BookOption.print_type == normalize_print_type(print_type),
+        )
+        .first()
+    )
+    if not option:
+        raise HTTPException(status_code=404, detail="Book pricing option not found")
+    return option
+
+
+def serialize_book(book: models.Book):
+    options = [
+        {
+            "mode": option.mode,
+            "print_type": option.print_type,
+            "price": option.price,
+        }
+        for option in book.options
+    ]
+    return {
+        "id": book.id,
+        "name": book.name,
+        "year": book.year,
+        "options": options,
+    }
+
+
+def serialize_admin_book(book: models.Book):
+    return {
+        "id": book.id,
+        "name": book.name,
+        "year": book.year,
+        "is_active": book.is_active,
+        "options": [
+            {
+                "id": option.id,
+                "book_id": option.book_id,
+                "mode": option.mode,
+                "print_type": option.print_type,
+                "price": option.price,
+            }
+            for option in book.options
+        ],
+    }
+
+
+def serialize_upload(upload: models.Upload):
+    return {
+        "id": upload.id,
+        "stored_filename": upload.stored_filename,
+        "original_filename": upload.original_filename,
+        "file_path": upload.file_path,
+        "total_pages": upload.total_pages,
+        "mode": upload.mode,
+        "print_type": upload.print_type,
+        "quantity": upload.copies,
+        "copies": upload.copies,
+        "calculated_price": upload.calculated_price,
+    }
+
+
+def serialize_cart_item(item: models.CartItem):
+    item_name = item.item_name
+    if not item_name and item.book:
+        item_name = item.book.name
+    if not item_name and item.upload:
+        item_name = item.upload.original_filename or item.upload.stored_filename
+
+    return {
+        "id": item.id,
+        "item_type": item.item_type,
+        "book_id": item.book_id,
+        "upload_id": item.upload_id,
+        "item_name": item_name or "",
+        "mode": item.mode,
+        "print_type": item.print_type,
+        "quantity": item.quantity,
+        "unit_price": item.unit_price,
+        "total_price": item.total_price or item.calculated_price,
+        "upload": serialize_upload(item.upload) if item.upload else None,
+    }
+
+
+def serialize_order_item(item: models.OrderItem):
+    item_name = item.item_name
+    if not item_name and item.book:
+        item_name = item.book.name
+    if not item_name and item.upload:
+        item_name = item.upload.original_filename or item.upload.stored_filename
+
+    return {
+        "id": item.id,
+        "item_type": item.item_type,
+        "book_id": item.book_id,
+        "upload_id": item.upload_id,
+        "item_name": item_name or "",
+        "stored_filename": item.stored_filename,
+        "original_filename": item.original_filename,
+        "total_pages": item.total_pages,
+        "mode": item.mode,
+        "print_type": item.print_type,
+        "quantity": item.quantity,
+        "unit_price": item.unit_price,
+        "total_price": item.total_price or item.calculated_price,
+    }
+
+
+def serialize_order(order: models.Order, include_user: bool = False):
+    payload = {
+        "id": order.id,
+        "delivery_type": order.delivery_type,
+        "hostel_name": order.hostel_name,
+        "contact_number": order.contact_number,
+        "alternate_contact_number": order.alternate_contact_number,
+        "total_amount": order.total_amount,
+        "status": order.status,
+        "created_at": order.created_at.isoformat() if order.created_at else None,
+        "items": [serialize_order_item(item) for item in order.items],
+    }
+    if include_user:
+        payload["user"] = {
+            "id": order.user.id if order.user else None,
+            "username": order.user.username if order.user else "",
+        }
+    return payload
+
+# -----------------------------
+# ROOT
+# -----------------------------
+
+@app.get("/")
+def root():
+    return {"message": "Batman backend running"}
+
+@app.post("/signup")
+def signup(user: schemas.UserCreate, db: Session = Depends(get_db)):
+    existing = db.query(models.User).filter(models.User.username == user.username).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Username exists")
+
+    db.add(models.User(username=user.username, password=pwd_context.hash(user.password)))
+    db.commit()
+    return {"message": "User created"}
+
+@app.post("/login")
+def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    db_user = db.query(models.User).filter(models.User.username == form_data.username).first()
+    if not db_user:
+        raise HTTPException(status_code=400, detail="Invalid username")
+    if not pwd_context.verify(form_data.password, db_user.password):
+        raise HTTPException(status_code=400, detail="Invalid password")
+
+    token = create_access_token(data={"sub": str(db_user.id)})
+    return {"access_token": token, "token_type": "bearer"}
+
+
+@app.get("/me")
+def me(current_user: models.User = Depends(get_current_user)):
+    return {"id": current_user.id, "username": current_user.username, "role": current_user.role}
+
+
+@app.get("/books")
+def get_books(db: Session = Depends(get_db)):
+    books = (
+        db.query(models.Book)
+        .options(joinedload(models.Book.options))
+        .filter(models.Book.is_active.is_(True))
+        .all()
+    )
+    return [serialize_book(book) for book in books]
+
+
+@app.get("/book-options/{book_id}")
+def get_book_options(book_id: int, db: Session = Depends(get_db)):
+    options = db.query(models.BookOption).filter(models.BookOption.book_id == book_id).all()
+    return [
+        {
+            "mode": option.mode,
+            "print_type": option.print_type,
+            "price": option.price,
+        }
+        for option in options
+    ]
+
+
+@app.post("/admin/books")
+def create_book(
+    payload: schemas.BookCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    require_admin(current_user)
+    book = models.Book(name=payload.name.strip(), year=payload.year.strip(), is_active=True)
+    db.add(book)
+    db.commit()
+    db.refresh(book)
+    return serialize_admin_book(book)
+
+
+@app.get("/admin/books")
+def get_admin_books(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    require_admin(current_user)
+    books = db.query(models.Book).options(joinedload(models.Book.options)).order_by(models.Book.name.asc()).all()
+    return [serialize_admin_book(book) for book in books]
+
+
+@app.post("/admin/book-options")
+def create_book_option(
+    payload: schemas.BookOptionCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    require_admin(current_user)
+
+    book = db.query(models.Book).filter(models.Book.id == payload.book_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    option = models.BookOption(
+        book_id=payload.book_id,
+        mode=payload.mode.strip(),
+        print_type=normalize_print_type(payload.print_type),
+        price=payload.price,
+        max_copies=payload.max_copies,
+    )
+    db.add(option)
+    db.commit()
+    db.refresh(option)
+    return {
+        "id": option.id,
+        "book_id": option.book_id,
+        "mode": option.mode,
+        "print_type": option.print_type,
+        "price": option.price,
+    }
+
+
+@app.put("/admin/book-options/{option_id}")
+def update_book_option_admin(
+    option_id: int,
+    payload: schemas.BookOptionUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    require_admin(current_user)
+
+    option = db.query(models.BookOption).filter(models.BookOption.id == option_id).first()
+    if not option:
+        raise HTTPException(status_code=404, detail="Book option not found")
+
+    if payload.mode is not None:
+        option.mode = payload.mode.strip()
+    if payload.print_type is not None:
+        option.print_type = normalize_print_type(payload.print_type)
+    if payload.price is not None:
+        option.price = payload.price
+    if payload.max_copies is not None:
+        option.max_copies = payload.max_copies
+
+    db.commit()
+    db.refresh(option)
+    return {
+        "id": option.id,
+        "book_id": option.book_id,
+        "mode": option.mode,
+        "print_type": option.print_type,
+        "price": option.price,
+    }
+
+
+@app.delete("/admin/book-options/{option_id}")
+def delete_book_option_admin(
+    option_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    require_admin(current_user)
+
+    option = db.query(models.BookOption).filter(models.BookOption.id == option_id).first()
+    if not option:
+        raise HTTPException(status_code=404, detail="Book option not found")
+
+    db.delete(option)
+    db.commit()
+    return {"message": "Book option deleted"}
+
+
+@app.get("/pricing/pdf")
+def get_pdf_quote(total_pages: int, copies: int, mode: str, print_type: str, db: Session = Depends(get_db)):
+    if total_pages <= 0 or copies <= 0:
+        raise HTTPException(status_code=400, detail="Pages and copies must be positive")
+
+    rule = get_pdf_pricing_rule(db, mode, print_type)
+    total_price = total_pages * copies * rule.price_per_page
+    return {
+        "mode": rule.mode,
+        "print_type": rule.print_type,
+        "price_per_page": rule.price_per_page,
+        "total_pages": total_pages,
+        "copies": copies,
+        "total_price": total_price,
+    }
+
+
+@app.post("/uploads/pdf")
+async def upload_pdf(
+    file: UploadFile = File(...),
+    total_pages: int = Form(...),
+    mode: str = Form(...),
+    print_type: str = Form(...),
+    copies: int | None = Form(None),
+    quantity: int | None = Form(None),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    copies = quantity or copies or 0
+    if total_pages <= 0 or copies <= 0:
+        raise HTTPException(status_code=400, detail="Pages and copies must be positive")
+
+    rule = get_pdf_pricing_rule(db, mode, print_type)
+    extension = Path(file.filename or "document.pdf").suffix or ".pdf"
+    stored_filename = f"{uuid.uuid4().hex}{extension}"
+    destination = UPLOAD_DIR / stored_filename
+    with destination.open("wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    total_price = total_pages * copies * rule.price_per_page
+    upload = models.Upload(
+        user_id=current_user.id,
+        file_path=f"app/uploads/{stored_filename}",
+        stored_filename=stored_filename,
+        original_filename=file.filename,
+        total_pages=total_pages,
+        mode=normalize_mode(mode),
+        print_type=normalize_print_type(print_type),
+        copies=copies,
+        calculated_price=total_price,
+    )
+    db.add(upload)
+    db.commit()
+    db.refresh(upload)
+    return serialize_upload(upload)
+
+
+@app.get("/cart")
+def get_cart(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    items = (
+        db.query(models.CartItem)
+        .options(joinedload(models.CartItem.upload), joinedload(models.CartItem.book))
+        .filter(models.CartItem.user_id == current_user.id)
+        .all()
+    )
+    serialized = [serialize_cart_item(item) for item in items]
+    return {"items": serialized, "total_amount": sum(item["total_price"] for item in serialized)}
+
+
+@app.post("/cart/items")
+def add_to_cart(
+    payload: schemas.CartItemCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    item_type = payload.item_type.lower()
+    if payload.quantity <= 0:
+        raise HTTPException(status_code=400, detail="Quantity must be positive")
+
+    if item_type == "book":
+        if not payload.book_id or not payload.mode or not payload.print_type:
+            raise HTTPException(status_code=400, detail="Book items require book, mode, and print type")
+
+        book = db.query(models.Book).filter(models.Book.id == payload.book_id).first()
+        if not book:
+            raise HTTPException(status_code=404, detail="Book not found")
+
+        option = get_book_option(db, payload.book_id, payload.mode, payload.print_type)
+        total_price = option.price * payload.quantity
+        existing = (
+            db.query(models.CartItem)
+            .filter(
+                models.CartItem.user_id == current_user.id,
+                models.CartItem.item_type == "book",
+                models.CartItem.book_id == payload.book_id,
+                models.CartItem.mode == option.mode,
+                models.CartItem.print_type == option.print_type,
+            )
+            .first()
+        )
+        if existing:
+            existing.quantity += payload.quantity
+            existing.unit_price = option.price
+            existing.total_price = existing.quantity * option.price
+            existing.calculated_price = existing.total_price
+            cart_item = existing
+        else:
+            cart_item = models.CartItem(
+                user_id=current_user.id,
+                item_type="book",
+                reference_id=payload.book_id,
+                book_id=payload.book_id,
+                mode=option.mode,
+                print_type=option.print_type,
+                item_name=book.name,
+                quantity=payload.quantity,
+                unit_price=option.price,
+                total_price=total_price,
+                calculated_price=total_price,
+            )
+            db.add(cart_item)
+    elif item_type == "pdf":
+        upload_query = db.query(models.Upload).filter(models.Upload.user_id == current_user.id)
+        if payload.upload_id:
+            upload_query = upload_query.filter(models.Upload.id == payload.upload_id)
+        elif payload.stored_filename:
+            upload_query = upload_query.filter(models.Upload.stored_filename == payload.stored_filename)
+        else:
+            raise HTTPException(status_code=400, detail="PDF items require upload_id or stored_filename")
+
+        upload = upload_query.first()
+        if not upload:
+            raise HTTPException(status_code=404, detail="Upload not found")
+
+        if payload.total_pages and upload.total_pages != payload.total_pages:
+            upload.total_pages = payload.total_pages
+        if payload.mode:
+            upload.mode = normalize_mode(payload.mode)
+        if payload.print_type:
+            upload.print_type = normalize_print_type(payload.print_type)
+        if payload.quantity:
+            upload.copies = payload.quantity
+            rule = get_pdf_pricing_rule(db, upload.mode or payload.mode, upload.print_type or payload.print_type)
+            upload.calculated_price = upload.total_pages * upload.copies * rule.price_per_page
+
+        line_total = upload.calculated_price
+        unit_price = line_total / max(upload.copies, 1)
+        existing = (
+            db.query(models.CartItem)
+            .filter(
+                models.CartItem.user_id == current_user.id,
+                models.CartItem.item_type == "pdf",
+                models.CartItem.upload_id == upload.id,
+            )
+            .first()
+        )
+        if existing:
+            existing.quantity = upload.copies
+            existing.unit_price = unit_price
+            existing.total_price = line_total
+            existing.calculated_price = line_total
+            existing.item_name = upload.original_filename or upload.stored_filename
+            existing.mode = upload.mode
+            existing.print_type = upload.print_type
+            cart_item = existing
+        else:
+            cart_item = models.CartItem(
+                user_id=current_user.id,
+                item_type="pdf",
+                reference_id=upload.id,
+                upload_id=upload.id,
+                mode=upload.mode,
+                print_type=upload.print_type,
+                item_name=upload.original_filename or upload.stored_filename,
+                quantity=upload.copies,
+                unit_price=unit_price,
+                total_price=line_total,
+                calculated_price=line_total,
+            )
+            db.add(cart_item)
+    else:
+        raise HTTPException(status_code=400, detail="Unsupported cart item type")
+
+    db.commit()
+    db.refresh(cart_item)
+    return serialize_cart_item(cart_item)
+
+
+@app.delete("/cart/items/{item_id}")
+def remove_cart_item(
+    item_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    item = (
+        db.query(models.CartItem)
+        .filter(models.CartItem.id == item_id, models.CartItem.user_id == current_user.id)
+        .first()
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail="Cart item not found")
+
+    db.delete(item)
+    db.commit()
+    return {"message": "Cart item removed"}
+
+@app.post("/orders")
+def create_order(
+    order: schemas.OrderCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    cart_items = (
+        db.query(models.CartItem)
+        .options(joinedload(models.CartItem.upload), joinedload(models.CartItem.book))
+        .filter(models.CartItem.user_id == current_user.id)
+        .all()
+    )
+    if not cart_items:
+        raise HTTPException(status_code=400, detail="Cart is empty")
+
+    total_amount = sum((item.total_price or item.calculated_price or 0) for item in cart_items)
+    new_order = models.Order(
+        user_id=current_user.id,
+        delivery_type=order.delivery_type,
+        hostel_name=order.hostel_name,
+        contact_number=order.contact_number,
+        alternate_contact_number=order.alternate_contact_number,
+        total_amount=total_amount,
+        status="pending",
+    )
+    db.add(new_order)
+    db.flush()
+
+    for cart_item in cart_items:
+        upload = cart_item.upload
+        db.add(
+            models.OrderItem(
+                order_id=new_order.id,
+                item_type=cart_item.item_type,
+                reference_id=cart_item.reference_id,
+                book_id=cart_item.book_id,
+                upload_id=cart_item.upload_id,
+                item_name=cart_item.item_name,
+                stored_filename=upload.stored_filename if upload else None,
+                original_filename=upload.original_filename if upload else None,
+                total_pages=upload.total_pages if upload else None,
+                mode=cart_item.mode,
+                print_type=cart_item.print_type,
+                quantity=cart_item.quantity,
+                unit_price=cart_item.unit_price,
+                calculated_price=cart_item.calculated_price,
+                total_price=cart_item.total_price or cart_item.calculated_price,
+            )
+        )
+
+    db.commit()
+    db.refresh(new_order)
+    return {"order_id": new_order.id, "total_amount": new_order.total_amount}
+
+
+@app.post("/order/create")
+def create_order_legacy(
+    order: schemas.OrderCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return create_order(order=order, db=db, current_user=current_user)
+
+
+@app.post("/payment/create/{order_id}")
+def create_payment(
+    order_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    order = (
+        db.query(models.Order)
+        .filter(models.Order.id == order_id, models.Order.user_id == current_user.id)
+        .first()
+    )
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    razorpay_order = razorpay_client.order.create(
+        {"amount": int(order.total_amount * 100), "currency": "INR", "payment_capture": 1}
+    )
+    order.razorpay_order_id = razorpay_order["id"]
+    db.commit()
+    return razorpay_order
+
+
+@app.post("/payment/verify")
+def verify_payment(
+    payload: schemas.PaymentVerification,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    try:
+        razorpay_client.utility.verify_payment_signature(
+            {
+                "razorpay_order_id": payload.razorpay_order_id,
+                "razorpay_payment_id": payload.razorpay_payment_id,
+                "razorpay_signature": payload.razorpay_signature,
+            }
+        )
+    except Exception:
+        raise HTTPException(status_code=400, detail="Payment verification failed")
+
+    order = (
+        db.query(models.Order)
+        .filter(
+            models.Order.razorpay_order_id == payload.razorpay_order_id,
+            models.Order.user_id == current_user.id,
+        )
+        .first()
+    )
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    order.status = "paid"
+    order.razorpay_payment_id = payload.razorpay_payment_id
+    db.query(models.CartItem).filter(models.CartItem.user_id == current_user.id).delete()
+    db.commit()
+    return {"message": "Payment verified"}
+
+
+@app.get("/my-orders")
+def my_orders(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    orders = (
+        db.query(models.Order)
+        .options(
+            joinedload(models.Order.items).joinedload(models.OrderItem.book),
+            joinedload(models.Order.items).joinedload(models.OrderItem.upload),
+        )
+        .filter(models.Order.user_id == current_user.id)
+        .order_by(models.Order.created_at.desc())
+        .all()
+    )
+    return [serialize_order(order) for order in orders]
+
+
+@app.get("/admin/orders")
+def admin_orders(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    orders = (
+        db.query(models.Order)
+        .options(
+            joinedload(models.Order.items).joinedload(models.OrderItem.book),
+            joinedload(models.Order.items).joinedload(models.OrderItem.upload),
+            joinedload(models.Order.user),
+        )
+        .order_by(models.Order.created_at.desc())
+        .all()
+    )
+    return [serialize_order(order, include_user=True) for order in orders]
+
+
+@app.put("/admin/orders/{order_id}/status")
+def update_order_status(
+    order_id: int,
+    status: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    order = db.query(models.Order).filter(models.Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    order.status = status
+    db.commit()
+    return {"message": "Order status updated"}
+
+
+@app.put("/admin/update-order-status/{order_id}")
+def update_order_status_legacy(
+    order_id: int,
+    status: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return update_order_status(order_id=order_id, status=status, db=db, current_user=current_user)

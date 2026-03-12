@@ -1,0 +1,51 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  background-color: #0A0A0A;
+  color: #F5F5F5;
+}
+/* Glass morphism card */
+
+.glass-card{
+  background: rgba(255,255,255,0.05);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 18px;
+  transition: all 0.25s ease;
+}
+
+.glass-card:hover{
+  transform: translateY(-4px);
+  border: 1px solid rgba(255,255,255,0.2);
+}
+
+
+/* iPhone button animation */
+
+.glass-btn{
+  transition: all 0.2s ease;
+}
+
+.glass-btn:hover{
+  transform: scale(1.04);
+}
+
+.glass-btn:active{
+  transform: scale(0.96);
+}
+.app-container{
+  width:100%;
+  max-width:420px;
+  min-height:100vh;
+  margin:0 auto;
+  background:#0b0b0b;
+  position:relative;
+}
+
+body{
+  margin:0;
+  background:#0b0b0b;
+}
