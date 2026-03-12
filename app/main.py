@@ -34,11 +34,17 @@ RAZORPAY_KEY_ID = get_required_env("RAZORPAY_KEY_ID")
 RAZORPAY_KEY_SECRET = get_required_env("RAZORPAY_KEY_SECRET")
 WEBHOOK_SECRET = get_required_env("WEBHOOK_SECRET")
 
+DEFAULT_CORS_ORIGINS = [
+    "https://demo-ashy-sigma.vercel.app",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
 CORS_ORIGINS = [
     origin.strip()
     for origin in os.getenv(
         "CORS_ORIGINS",
-        os.getenv("FRONTEND_URL", "http://localhost:5173,http://127.0.0.1:5173"),
+        os.getenv("FRONTEND_URL", ",".join(DEFAULT_CORS_ORIGINS)),
     ).split(",")
     if origin.strip()
 ]
