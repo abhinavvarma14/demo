@@ -34,11 +34,15 @@ try {
 
   navigate("/login")
 
-} catch (err) {
+} catch (error) {
 
-  console.log(err)
+  console.log(error)
 
-  toast.error("Signup failed")
+  if (error.response?.data?.detail === "Username already exists") {
+    toast.error("Username already exists")
+  } else {
+    toast.error("Signup failed")
+  }
 
 }
 

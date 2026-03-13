@@ -38,11 +38,15 @@ try {
     navigate("/")
   }
 
-} catch (err) {
+} catch (error) {
 
-  console.log(err)
+  console.log(error)
 
-  toast.error("Login failed")
+  if (error.response?.data?.detail) {
+    toast.error(error.response.data.detail)
+  } else {
+    toast.error("Login failed")
+  }
 
 }
 
@@ -93,6 +97,17 @@ return (
         Signup
       </span>
 
+    </p>
+
+    <p className="text-center text-gray-400 text-sm mt-3">
+      If you don't have an account, create one.
+
+      <span
+        onClick={() => navigate("/signup")}
+        className="text-yellow-400 ml-2 cursor-pointer"
+      >
+        Signup
+      </span>
     </p>
 
   </form>
