@@ -25,7 +25,7 @@ function Admin({ defaultSection = "orders" }) {
   const [newOption, setNewOption] = useState({
     book_id: "",
     mode: "",
-    print_type: "single",
+    print_type: "",
     price: "",
   })
 
@@ -212,7 +212,7 @@ function Admin({ defaultSection = "orders" }) {
 
   const createBookOption = async () => {
     if (!newOption.book_id || !newOption.price) {
-      toast.error("Fill book, print type, and price")
+      toast.error("Fill book and price")
       return
     }
 
@@ -227,7 +227,7 @@ function Admin({ defaultSection = "orders" }) {
       setNewOption((current) => ({
         ...current,
         mode: "",
-        print_type: "single",
+        print_type: "",
         price: "",
       }))
       await fetchBooks()
@@ -602,6 +602,9 @@ function Admin({ defaultSection = "orders" }) {
             <h2 className="text-lg font-semibold mb-4">
               Add Book Option
             </h2>
+            <p className="mb-4 text-sm text-gray-400">
+              For a simple fixed-price book, keep both Mode and Side Selection empty.
+            </p>
 
             <div className="grid gap-3">
               <select
@@ -632,7 +635,7 @@ function Admin({ defaultSection = "orders" }) {
                 className="bg-white/5 border border-white/10 rounded-xl p-3"
               >
                 <option value="">
-                  No side selection
+                  No side selection (simple book)
                 </option>
                 <option value="single">
                   Single
@@ -716,10 +719,14 @@ function Admin({ defaultSection = "orders" }) {
 
                 {(book.options || []).map((option) => (
                   <div key={option.id} className="border-t border-white/5 pt-3 mt-3">
+                    <p className="mb-3 text-xs uppercase tracking-[0.24em] text-white/45">
+                      {!option.mode && !option.print_type ? "Simple fixed price option" : "Book option"}
+                    </p>
                     <div className="grid gap-3">
                       <input
                         value={option.mode || ""}
                         onChange={(event) => handleOptionChange(book.id, option.id, "mode", event.target.value)}
+                        placeholder="Mode (optional)"
                         className="bg-white/5 border border-white/10 rounded-xl p-3"
                       />
 
@@ -729,7 +736,7 @@ function Admin({ defaultSection = "orders" }) {
                         className="bg-white/5 border border-white/10 rounded-xl p-3"
                       >
                         <option value="">
-                          No side selection
+                          No side selection (simple book)
                         </option>
                         <option value="single">
                           Single

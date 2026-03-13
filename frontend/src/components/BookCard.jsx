@@ -129,6 +129,11 @@ function BookCard({ book }) {
             <p className="mt-1 text-[11px] text-white/45">
               {book.pages ? `${book.pages} pages` : "Campus print edition"}
             </p>
+            {!hasModeSelector && !hasSideSelector && (
+              <p className="mt-2 inline-flex rounded-full bg-yellow-400/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-yellow-400">
+                Fixed Price
+              </p>
+            )}
           </div>
 
           <div className="text-right text-[11px] text-white/50">
