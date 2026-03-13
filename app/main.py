@@ -352,6 +352,10 @@ def decode_print_group_id(group_id: str) -> tuple[str, str | None, str]:
 def sync_schema():
     inspector = inspect(engine)
     expected_columns = {
+        "books": {
+            "requires_details": "ALTER TABLE books ADD COLUMN requires_details BOOLEAN DEFAULT FALSE",
+            "is_pinned": "ALTER TABLE books ADD COLUMN is_pinned BOOLEAN DEFAULT FALSE",
+        },
         "uploads": {
             "stored_filename": "ALTER TABLE uploads ADD COLUMN stored_filename VARCHAR",
             "original_filename": "ALTER TABLE uploads ADD COLUMN original_filename VARCHAR",
@@ -369,6 +373,8 @@ def sync_schema():
             "item_name": "ALTER TABLE cart_items ADD COLUMN item_name VARCHAR",
             "unit_price": "ALTER TABLE cart_items ADD COLUMN unit_price FLOAT DEFAULT 0",
             "total_price": "ALTER TABLE cart_items ADD COLUMN total_price FLOAT DEFAULT 0",
+            "leave_date": "ALTER TABLE cart_items ADD COLUMN leave_date VARCHAR",
+            "request_reason": "ALTER TABLE cart_items ADD COLUMN request_reason VARCHAR",
         },
         "order_items": {
             "book_id": "ALTER TABLE order_items ADD COLUMN book_id INTEGER",
@@ -382,6 +388,8 @@ def sync_schema():
             "unit_price": "ALTER TABLE order_items ADD COLUMN unit_price FLOAT DEFAULT 0",
             "total_price": "ALTER TABLE order_items ADD COLUMN total_price FLOAT DEFAULT 0",
             "printed": "ALTER TABLE order_items ADD COLUMN printed BOOLEAN DEFAULT FALSE",
+            "leave_date": "ALTER TABLE order_items ADD COLUMN leave_date VARCHAR",
+            "request_reason": "ALTER TABLE order_items ADD COLUMN request_reason VARCHAR",
         },
         "support_threads": {
             "status": "ALTER TABLE support_threads ADD COLUMN status VARCHAR DEFAULT 'open'",
@@ -520,6 +528,8 @@ def serialize_book(book: models.Book):
         "id": book.id,
         "name": book.name,
         "year": book.year,
+        "requires_details": bool(getattr(book, "requires_details", False)),
+        "is_pinned": bool(getattr(book, "is_pinned", False)),
         "options": options,
     }
 
@@ -530,6 +540,8 @@ def serialize_admin_book(book: models.Book):
         "name": book.name,
         "year": book.year,
         "is_active": book.is_active,
+        "requires_details": bool(getattr(book, "requires_details", False)),
+        "is_pinned": bool(getattr(book, "is_pinned", False)),
         "options": [
             {
                 "id": option.id,
@@ -576,6 +588,8 @@ def serialize_cart_item(item: models.CartItem):
         "quantity": item.quantity,
         "unit_price": item.unit_price,
         "total_price": item.total_price or item.calculated_price,
+        "leave_date": item.leave_date,
+        "request_reason": item.request_reason,
         "upload": serialize_upload(item.upload) if item.upload else None,
     }
 
@@ -602,6 +616,8 @@ def serialize_order_item(item: models.OrderItem):
         "unit_price": item.unit_price,
         "total_price": item.total_price or item.calculated_price,
         "printed": item.printed,
+        "leave_date": item.leave_date,
+        "request_reason": item.request_reason,
     }
 
 
@@ -661,6 +677,8 @@ def serialize_delivery_order(order: models.Order):
                 "item_name": item.item_name or (item.book.name if item.book else item.original_filename or "Unnamed item"),
                 "quantity": item.quantity,
                 "stored_filename": item.stored_filename,
+                "leave_date": item.leave_date,
+                "request_reason": item.request_reason,
             }
             for item in order.items
         ],
@@ -819,6 +837,7 @@ def get_books(db: Session = Depends(get_db)):
         db.query(models.Book)
         .options(joinedload(models.Book.options))
         .filter(models.Book.is_active.is_(True))
+        .order_by(models.Book.is_pinned.desc(), models.Book.name.asc())
         .all()
     )
     return [serialize_book(book) for book in books]
@@ -844,7 +863,13 @@ def create_book(
     current_user: models.User = Depends(get_current_user),
 ):
     require_admin(current_user)
-    book = models.Book(name=payload.name.strip(), year=payload.year.strip(), is_active=True)
+    book = models.Book(
+        name=payload.name.strip(),
+        year=payload.year.strip(),
+        is_active=True,
+        requires_details=payload.requires_details,
+        is_pinned=payload.is_pinned,
+    )
     db.add(book)
     db.commit()
     db.refresh(book)
@@ -879,6 +904,10 @@ def update_book(
         book.year = payload.year.strip()
     if payload.is_active is not None:
         book.is_active = payload.is_active
+    if payload.requires_details is not None:
+        book.requires_details = payload.requires_details
+    if payload.is_pinned is not None:
+        book.is_pinned = payload.is_pinned
 
     db.commit()
     db.refresh(book)
@@ -1089,6 +1118,8 @@ def add_to_cart(
 
         option = get_book_option(db, payload.book_id, payload.mode, payload.print_type)
         total_price = option.price * payload.quantity
+        leave_date = payload.leave_date.strip() if payload.leave_date else None
+        request_reason = payload.request_reason.strip() if payload.request_reason else None
         existing = (
             db.query(models.CartItem)
             .filter(
@@ -1105,6 +1136,8 @@ def add_to_cart(
             existing.unit_price = option.price
             existing.total_price = existing.quantity * option.price
             existing.calculated_price = existing.total_price
+            existing.leave_date = leave_date or existing.leave_date
+            existing.request_reason = request_reason or existing.request_reason
             cart_item = existing
         else:
             cart_item = models.CartItem(
@@ -1119,6 +1152,8 @@ def add_to_cart(
                 unit_price=option.price,
                 total_price=total_price,
                 calculated_price=total_price,
+                leave_date=leave_date,
+                request_reason=request_reason,
             )
             db.add(cart_item)
     elif item_type == "pdf":
@@ -1286,6 +1321,8 @@ def create_order(
                 unit_price=cart_item.unit_price,
                 calculated_price=cart_item.calculated_price,
                 total_price=cart_item.total_price or cart_item.calculated_price,
+                leave_date=cart_item.leave_date,
+                request_reason=cart_item.request_reason,
             )
         )
 

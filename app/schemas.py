@@ -33,12 +33,16 @@ class UserLogin(BaseModel):
 class BookCreate(BaseModel):
     name: str = Field(min_length=2, max_length=120)
     year: str = Field(min_length=2, max_length=20)
+    requires_details: bool = False
+    is_pinned: bool = False
 
 
 class BookUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=2, max_length=120)
     year: Optional[str] = Field(default=None, min_length=2, max_length=20)
     is_active: Optional[bool] = None
+    requires_details: Optional[bool] = None
+    is_pinned: Optional[bool] = None
 
 
 class BookOptionCreate(BaseModel):
@@ -96,6 +100,8 @@ class CartItemCreate(BaseModel):
     mode: Optional[str] = None
     print_type: Optional[str] = None
     quantity: int = Field(default=1, gt=0)
+    leave_date: Optional[str] = None
+    request_reason: Optional[str] = None
 
     @field_validator("item_type")
     @classmethod
@@ -124,6 +130,26 @@ class CartItemCreate(BaseModel):
         if normalized not in {"single", "double", "single_side", "double_side"}:
             raise ValueError("Print type must be single or double")
         return value
+
+    @field_validator("leave_date")
+    @classmethod
+    def validate_leave_date(cls, value: Optional[str]):
+        if value is None:
+            return value
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("request_reason")
+    @classmethod
+    def validate_request_reason(cls, value: Optional[str]):
+        if value is None:
+            return value
+        normalized = value.strip()
+        if not normalized:
+            return None
+        if len(normalized) < 3:
+            raise ValueError("Reason must be at least 3 characters")
+        return normalized
 
 
 class OrderCreate(BaseModel):

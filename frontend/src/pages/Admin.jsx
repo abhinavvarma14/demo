@@ -20,7 +20,7 @@ function Admin({ defaultSection = "orders" }) {
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState("")
   const [activeSection, setActiveSection] = useState(defaultSection)
-  const [newBook, setNewBook] = useState({ name: "", year: "" })
+  const [newBook, setNewBook] = useState({ name: "", year: "", requires_details: false, is_pinned: false })
   const [supportReplies, setSupportReplies] = useState({})
   const [newOption, setNewOption] = useState({
     book_id: "",
@@ -199,7 +199,7 @@ function Admin({ defaultSection = "orders" }) {
     try {
       setActionLoading("create-book")
       await API.post("/admin/books", newBook)
-      setNewBook({ name: "", year: "" })
+      setNewBook({ name: "", year: "", requires_details: false, is_pinned: false })
       await fetchBooks()
       toast.success("Book created")
     } catch (error) {
@@ -301,6 +301,8 @@ function Admin({ defaultSection = "orders" }) {
         name: book.name,
         year: book.year,
         is_active: book.is_active,
+        requires_details: !!book.requires_details,
+        is_pinned: !!book.is_pinned,
       })
       await fetchBooks()
       toast.success("Book updated")
@@ -588,6 +590,34 @@ function Admin({ defaultSection = "orders" }) {
                 className="bg-white/5 border border-white/10 rounded-xl p-3"
               />
 
+              <label className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white">
+                <input
+                  type="checkbox"
+                  checked={newBook.requires_details}
+                  onChange={(event) =>
+                    setNewBook((current) => ({
+                      ...current,
+                      requires_details: event.target.checked,
+                    }))
+                  }
+                />
+                Special request card
+              </label>
+
+              <label className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white">
+                <input
+                  type="checkbox"
+                  checked={newBook.is_pinned}
+                  onChange={(event) =>
+                    setNewBook((current) => ({
+                      ...current,
+                      is_pinned: event.target.checked,
+                    }))
+                  }
+                />
+                Pin this book to top
+              </label>
+
               <button
                 onClick={createBook}
                 disabled={actionLoading === "create-book"}
@@ -691,6 +721,24 @@ function Admin({ defaultSection = "orders" }) {
                     onChange={(event) => handleBookChange(book.id, "year", event.target.value)}
                     className="bg-white/5 border border-white/10 rounded-xl p-3"
                   />
+
+                  <label className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white">
+                    <input
+                      type="checkbox"
+                      checked={!!book.requires_details}
+                      onChange={(event) => handleBookChange(book.id, "requires_details", event.target.checked)}
+                    />
+                    Special request card
+                  </label>
+
+                  <label className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white">
+                    <input
+                      type="checkbox"
+                      checked={!!book.is_pinned}
+                      onChange={(event) => handleBookChange(book.id, "is_pinned", event.target.checked)}
+                    />
+                    Pin this book to top
+                  </label>
                 </div>
 
                 <div className="flex gap-2 mb-3">
@@ -827,6 +875,18 @@ function Admin({ defaultSection = "orders" }) {
                     <p className="text-gray-500 text-xs">
                       {item.mode || "-"} • {item.print_type === "single" ? "Single Side" : item.print_type === "double" ? "Double Side" : item.print_type || "-"} • Qty {item.quantity}
                     </p>
+
+                    {item.leave_date && (
+                      <p className="text-gray-500 text-xs mt-1">
+                        Leave Date: {item.leave_date}
+                      </p>
+                    )}
+
+                    {item.request_reason && (
+                      <p className="text-gray-500 text-xs mt-1">
+                        Reason: {item.request_reason}
+                      </p>
+                    )}
 
                     {item.stored_filename && (
                       <div className="mt-2 flex gap-2">

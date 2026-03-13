@@ -79,6 +79,16 @@ function Orders(){
             {(order.items || []).map((item) => (
               <div key={item.id} className="text-sm text-gray-400 border-t border-white/5 pt-2">
                 {item.item_name || "Unnamed item"} • {item.mode || "-"} • {item.print_type === "single" ? "Single" : item.print_type === "double" ? "Double" : item.print_type || "-"} • Qty {item.quantity}
+                {item.leave_date && (
+                  <div className="mt-1 text-xs text-white/55">
+                    Leave Date: {item.leave_date}
+                  </div>
+                )}
+                {item.request_reason && (
+                  <div className="mt-1 text-xs text-white/55">
+                    Reason: {item.request_reason}
+                  </div>
+                )}
               </div>
             ))}
           </div>

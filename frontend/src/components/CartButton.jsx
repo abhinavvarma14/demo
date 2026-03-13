@@ -42,8 +42,8 @@ function CartButton({ hasAdded, quantity, loading, onClick, pulseKey }) {
           </span>
         </motion.button>
       ) : (
-        <div className="grid grid-cols-[1fr,1.2fr] gap-2">
-          <div className="flex items-center justify-center rounded-2xl bg-black px-3 py-2 text-xs font-semibold text-yellow-400">
+        <div className="grid grid-cols-[0.9fr,1.1fr] gap-1.5">
+          <div className="flex min-w-0 items-center justify-center rounded-2xl bg-black px-2 py-2 text-[11px] font-semibold text-yellow-400">
             <Check size={14} className="mr-1.5" />
             Added
           </div>
@@ -54,9 +54,9 @@ function CartButton({ hasAdded, quantity, loading, onClick, pulseKey }) {
             type="button"
             onClick={onClick}
             disabled={loading}
-          className="flex items-center justify-center rounded-2xl bg-yellow-400 px-3 py-2 text-xs font-semibold text-black shadow-[0_6px_14px_rgba(250,204,21,0.14)] disabled:cursor-not-allowed disabled:opacity-70"
+          className="flex min-w-0 items-center justify-center rounded-2xl bg-yellow-400 px-2 py-2 text-[11px] font-semibold text-black shadow-[0_6px_12px_rgba(250,204,21,0.1)] disabled:cursor-not-allowed disabled:opacity-70"
           >
-            {loading ? "Adding..." : `Add More (${quantity})`}
+            {loading ? "Adding..." : `+ More (${quantity})`}
           </motion.button>
         </div>
       )}

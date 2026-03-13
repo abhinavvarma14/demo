@@ -30,6 +30,8 @@ class Book(Base):
     name = Column(String, nullable=False)
     year = Column(String)
     is_active = Column(Boolean, default=True)
+    requires_details = Column(Boolean, default=False)
+    is_pinned = Column(Boolean, default=False)
 
     options = relationship("BookOption", back_populates="book", cascade="all, delete")
     cart_items = relationship("CartItem", back_populates="book")
@@ -95,6 +97,8 @@ class CartItem(Base):
     unit_price = Column(Float, default=0)
     calculated_price = Column(Float, default=0)
     total_price = Column(Float, default=0)
+    leave_date = Column(String, nullable=True)
+    request_reason = Column(String, nullable=True)
 
     user = relationship("User", back_populates="cart_items")
     upload = relationship("Upload", back_populates="cart_items")
@@ -140,6 +144,8 @@ class OrderItem(Base):
     calculated_price = Column(Float, default=0)
     total_price = Column(Float, default=0)
     printed = Column(Boolean, default=False, index=True)
+    leave_date = Column(String, nullable=True)
+    request_reason = Column(String, nullable=True)
 
     order = relationship("Order", back_populates="items")
     upload = relationship("Upload", back_populates="order_items")

@@ -310,6 +310,89 @@ def test_book_can_have_simple_price_without_mode_or_side(client, app_module):
     assert add_cart_response.json()["mode"] == ""
 
 
+def test_special_request_book_carries_leave_date_and_reason(client, app_module):
+    create_admin(app_module)
+    admin_token = login(client, username="adminuser").json()["access_token"]
+
+    create_book_response = client.post(
+        "/admin/books",
+        json={"name": "Leave Card", "year": "Y26", "requires_details": True},
+        headers=auth_headers(admin_token),
+    )
+    assert create_book_response.status_code == 200
+    book_id = create_book_response.json()["id"]
+    assert create_book_response.json()["requires_details"] is True
+
+    option_response = client.post(
+        "/admin/book-options",
+        json={"book_id": book_id, "mode": "", "print_type": "", "price": 150},
+        headers=auth_headers(admin_token),
+    )
+    assert option_response.status_code == 200
+
+    signup(client, username="leavebuyer")
+    buyer_token = login(client, username="leavebuyer").json()["access_token"]
+
+    add_cart_response = client.post(
+        "/cart/items",
+        json={
+            "item_type": "book",
+            "book_id": book_id,
+            "quantity": 1,
+            "leave_date": "2026-03-20",
+            "request_reason": "Need approval for leave",
+        },
+        headers=auth_headers(buyer_token),
+    )
+    assert add_cart_response.status_code == 200
+    assert add_cart_response.json()["leave_date"] == "2026-03-20"
+    assert add_cart_response.json()["request_reason"] == "Need approval for leave"
+
+    order_response = client.post(
+        "/orders",
+        json={
+            "delivery_type": "hostel",
+            "hostel_name": "Himalaya",
+            "contact_number": "9876543210",
+            "alternate_contact_number": "",
+        },
+        headers=auth_headers(buyer_token),
+    )
+    assert order_response.status_code == 200
+
+    admin_orders_response = client.get("/admin/orders", headers=auth_headers(admin_token))
+    assert admin_orders_response.status_code == 200
+    admin_order_items = admin_orders_response.json()[0]["items"]
+    assert admin_order_items[0]["leave_date"] == "2026-03-20"
+    assert admin_order_items[0]["request_reason"] == "Need approval for leave"
+
+
+def test_pinned_books_are_shown_first(client, app_module):
+    create_admin(app_module)
+    admin_token = login(client, username="adminuser").json()["access_token"]
+
+    pinned_response = client.post(
+        "/admin/books",
+        json={"name": "Pinned Book", "year": "Y26", "is_pinned": True},
+        headers=auth_headers(admin_token),
+    )
+    assert pinned_response.status_code == 200
+
+    normal_response = client.post(
+        "/admin/books",
+        json={"name": "Normal Book", "year": "Y26", "is_pinned": False},
+        headers=auth_headers(admin_token),
+    )
+    assert normal_response.status_code == 200
+
+    books_response = client.get("/books")
+    assert books_response.status_code == 200
+    books = books_response.json()
+    pinned_index = next(i for i, book in enumerate(books) if book["name"] == "Pinned Book")
+    normal_index = next(i for i, book in enumerate(books) if book["name"] == "Normal Book")
+    assert pinned_index < normal_index
+
+
 def test_order_and_print_queue_flow(client, app_module):
     signup(client, username="buyer")
     buyer_token = login(client, username="buyer").json()["access_token"]

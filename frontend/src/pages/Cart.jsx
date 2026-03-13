@@ -102,6 +102,18 @@ function Cart() {
             Quantity: {item.quantity}
           </p>
 
+          {item.leave_date && (
+            <p className="text-gray-400 text-sm">
+              Leave Date: {item.leave_date}
+            </p>
+          )}
+
+          {item.request_reason && (
+            <p className="text-gray-400 text-sm">
+              Reason: {item.request_reason}
+            </p>
+          )}
+
           <div className="flex gap-2 mt-3">
             <button
               onClick={() => updateQuantity(item, item.quantity - 1)}

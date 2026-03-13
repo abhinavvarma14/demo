@@ -90,14 +90,26 @@ function Delivery() {
               {(order.items || []).map((item) => (
                 <div
                   key={item.id}
-                  className="flex items-center justify-between gap-3 rounded-lg bg-black/20 px-3 py-2"
+                  className="rounded-lg bg-black/20 px-3 py-2"
                 >
-                  <p className="text-sm text-white">
-                    {item.item_name}
-                  </p>
-                  <span className="text-sm text-yellow-400">
-                    Qty {item.quantity}
-                  </span>
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm text-white">
+                      {item.item_name}
+                    </p>
+                    <span className="text-sm text-yellow-400">
+                      Qty {item.quantity}
+                    </span>
+                  </div>
+                  {item.leave_date && (
+                    <p className="mt-1 text-xs text-white/55">
+                      Leave Date: {item.leave_date}
+                    </p>
+                  )}
+                  {item.request_reason && (
+                    <p className="mt-1 text-xs text-white/55">
+                      Reason: {item.request_reason}
+                    </p>
+                  )}
                 </div>
               ))}
             </div>
