@@ -1,12 +1,11 @@
 from typing import Literal, Optional
-import re
 
 from pydantic import BaseModel, Field, field_validator
 
 
 class UserCreate(BaseModel):
     username: str = Field(min_length=3, max_length=30)
-    password: str = Field(min_length=8, max_length=128)
+    password: str = Field(min_length=4, max_length=128)
 
     @field_validator("username")
     @classmethod
@@ -21,8 +20,8 @@ class UserCreate(BaseModel):
     @field_validator("password")
     @classmethod
     def validate_password(cls, value: str):
-        if not re.search(r"[A-Z]", value) or not re.search(r"[a-z]", value) or not re.search(r"\d", value) or not re.search(r"[^A-Za-z0-9]", value):
-            raise ValueError("Password must contain uppercase, lowercase, number, and symbol.")
+        if len(value.strip()) < 4:
+            raise ValueError("Password must be at least 4 characters")
         return value
 
 
@@ -115,7 +114,7 @@ class CartItemCreate(BaseModel):
 class OrderCreate(BaseModel):
     delivery_type: Literal["hostel", "dayscholar"]
     hostel_name: Optional[str] = None
-    contact_number: str = Field(min_length=10, max_length=15)
+    contact_number: str = Field(min_length=10, max_length=10)
     alternate_contact_number: Optional[str] = None
 
     @field_validator("hostel_name")
@@ -132,8 +131,10 @@ class OrderCreate(BaseModel):
         if value is None:
             return value
         normalized = value.strip()
-        if not normalized.isdigit() or len(normalized) not in {10, 11, 12, 13, 14, 15}:
-            raise ValueError("Contact number must contain 10 to 15 digits")
+        if not normalized:
+            return None
+        if not normalized.isdigit() or len(normalized) != 10:
+            raise ValueError("Contact number must contain exactly 10 digits")
         return normalized
 
 

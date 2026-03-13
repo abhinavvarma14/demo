@@ -13,6 +13,8 @@ function Checkout() {
   const [total, setTotal] = useState(0)
   const [submitting, setSubmitting] = useState(false)
 
+  const normalizePhoneInput = (value) => value.replace(/\D/g, "").slice(0, 10)
+
   useEffect(() => {
     const loadCartTotal = async () => {
       try {
@@ -40,6 +42,21 @@ function Checkout() {
         return
       }
 
+      if (deliveryType === "hostel" && !hostel.trim()) {
+        toast.error("Please enter hostel name")
+        return
+      }
+
+      if (!/^\d{10}$/.test(contact)) {
+        toast.error("Contact number must be exactly 10 digits")
+        return
+      }
+
+      if (alternate && !/^\d{10}$/.test(alternate)) {
+        toast.error("Alternate number must be exactly 10 digits")
+        return
+      }
+
       setSubmitting(true)
 
       const orderRes = await API.post("/orders", {
@@ -60,13 +77,17 @@ function Checkout() {
         description: "Printing Payment",
         order_id: paymentRes.data.id,
         handler: async function (response) {
-          await API.post("/payment/verify", {
-            razorpay_order_id: response.razorpay_order_id,
-            razorpay_payment_id: response.razorpay_payment_id,
-            razorpay_signature: response.razorpay_signature
-          })
-          toast.success("Payment Successful")
-          navigate("/orders")
+          try {
+            await API.post("/payment/verify", {
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature
+            })
+            toast.success("Payment Successful")
+            navigate("/orders")
+          } catch (verificationError) {
+            toast.error(getApiErrorMessage(verificationError, "Payment verification failed"))
+          }
         }
       }
 
@@ -157,7 +178,10 @@ function Checkout() {
 
         <input
           value={contact}
-          onChange={(e) => setContact(e.target.value)}
+          onChange={(e) => setContact(normalizePhoneInput(e.target.value))}
+          inputMode="numeric"
+          maxLength={10}
+          placeholder="Enter 10-digit number"
           className="w-full bg-white/5 border border-white/10 rounded-xl p-3"
         />
 
@@ -173,7 +197,10 @@ function Checkout() {
 
         <input
           value={alternate}
-          onChange={(e) => setAlternate(e.target.value)}
+          onChange={(e) => setAlternate(normalizePhoneInput(e.target.value))}
+          inputMode="numeric"
+          maxLength={10}
+          placeholder="Optional 10-digit number"
           className="w-full bg-white/5 border border-white/10 rounded-xl p-3"
         />
 
