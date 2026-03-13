@@ -213,6 +213,78 @@ def test_order_and_print_queue_flow(client, app_module):
     assert empty_queue_response.json() == []
 
 
+def test_pdf_upload_cart_and_admin_download_flow(client, app_module):
+    signup(client, username="pdfbuyer")
+    buyer_token = login(client, username="pdfbuyer").json()["access_token"]
+
+    pdf_bytes = (
+        b"%PDF-1.4\n"
+        b"1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
+        b"2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj\n"
+        b"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]>>endobj\n"
+        b"trailer<</Root 1 0 R>>\n%%EOF"
+    )
+
+    upload_response = client.post(
+        "/api/uploads/pdf",
+        data={"total_pages": "60", "quantity": "1"},
+        files={"file": ("notes.pdf", pdf_bytes, "application/pdf")},
+        headers=auth_headers(buyer_token),
+    )
+    assert upload_response.status_code == 200
+    upload_payload = upload_response.json()
+    assert upload_payload["total_pages"] == 60
+    assert upload_payload["stored_filename"]
+    assert upload_payload["calculated_price"] == 140.0
+
+    add_cart_response = client.post(
+        "/cart/items",
+        json={
+            "item_type": "pdf",
+            "upload_id": upload_payload["id"],
+            "stored_filename": upload_payload["stored_filename"],
+            "total_pages": upload_payload["total_pages"],
+            "quantity": 1,
+        },
+        headers=auth_headers(buyer_token),
+    )
+    assert add_cart_response.status_code == 200
+    cart_payload = add_cart_response.json()
+    assert cart_payload["item_type"] == "pdf"
+    assert cart_payload["upload_id"] == upload_payload["id"]
+    assert cart_payload["item_name"] == "notes.pdf"
+    assert cart_payload["total_price"] == 140.0
+
+    cart_response = client.get("/cart", headers=auth_headers(buyer_token))
+    assert cart_response.status_code == 200
+    cart_items = cart_response.json()["items"]
+    assert len(cart_items) == 1
+    assert cart_items[0]["upload"]["stored_filename"] == upload_payload["stored_filename"]
+
+    order_response = client.post(
+        "/orders",
+        json={
+            "delivery_type": "hostel",
+            "hostel_name": "Himalaya",
+            "contact_number": "9876543210",
+            "alternate_contact_number": "",
+        },
+        headers=auth_headers(buyer_token),
+    )
+    assert order_response.status_code == 200
+
+    create_admin(app_module)
+    admin_token = login(client, username="adminuser").json()["access_token"]
+
+    admin_orders_response = client.get("/admin/orders", headers=auth_headers(admin_token))
+    assert admin_orders_response.status_code == 200
+    admin_orders = admin_orders_response.json()
+    assert len(admin_orders) == 1
+    assert len(admin_orders[0]["items"]) == 1
+    assert admin_orders[0]["items"][0]["stored_filename"] == upload_payload["stored_filename"]
+    assert admin_orders[0]["items"][0]["original_filename"] == "notes.pdf"
+
+
 def test_legacy_plaintext_password_is_upgraded_on_login(client, app_module):
     db = app_module.SessionLocal()
     try:

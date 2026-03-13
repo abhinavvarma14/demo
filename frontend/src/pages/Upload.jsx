@@ -94,7 +94,7 @@ function Upload() {
       formData.append("total_pages", String(pages))
       formData.append("quantity", "1")
 
-      const uploadRes = await API.post("/uploads/pdf", formData)
+      const uploadRes = await API.post("/api/uploads/pdf", formData)
 
       await API.post("/cart/items", {
         item_type: "pdf",

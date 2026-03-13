@@ -939,7 +939,8 @@ def get_pdf_quote(
     }
 
 
-@app.post("/uploads/pdf")
+@app.post("/api/uploads/pdf")
+@app.post("/upload-pdf")
 async def upload_pdf(
     file: UploadFile = File(...),
     total_pages: int = Form(...),
