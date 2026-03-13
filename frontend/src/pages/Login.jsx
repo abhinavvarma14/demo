@@ -50,6 +50,8 @@ try {
 
   if (getUserRole() === "admin") {
     navigate("/admin")
+  } else if (getUserRole() === "delivery") {
+    navigate("/delivery")
   } else {
     navigate("/")
   }

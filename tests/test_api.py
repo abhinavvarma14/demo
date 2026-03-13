@@ -78,6 +78,20 @@ def create_admin(app_module, username="adminuser", password="Strongpass123!"):
         db.close()
 
 
+def create_delivery_user(app_module, username="deliveryuser", password="Strongpass123!"):
+    db = app_module.SessionLocal()
+    try:
+        delivery_user = app_module.models.User(
+            username=username,
+            password_hash=app_module.pwd_context.hash(password),
+            role="delivery",
+        )
+        db.add(delivery_user)
+        db.commit()
+    finally:
+        db.close()
+
+
 def auth_headers(token):
     return {"Authorization": f"Bearer {token}"}
 
@@ -136,6 +150,71 @@ def test_non_admin_cannot_access_dashboard(client):
 
     assert response.status_code == 403
     assert response.json()["detail"] == "Admin access required"
+
+
+def test_delivery_role_can_view_and_complete_delivery_orders(client, app_module):
+    signup(client, username="buyer")
+    buyer_token = login(client, username="buyer").json()["access_token"]
+
+    books_response = client.get("/books", headers=auth_headers(buyer_token))
+    first_book = books_response.json()[0]
+    first_option = first_book["options"][0]
+
+    add_cart_response = client.post(
+        "/cart/items",
+        json={
+            "item_type": "book",
+            "book_id": first_book["id"],
+            "mode": first_option["mode"],
+            "print_type": first_option["print_type"],
+            "quantity": 1,
+        },
+        headers=auth_headers(buyer_token),
+    )
+    assert add_cart_response.status_code == 200
+
+    order_response = client.post(
+        "/orders",
+        json={
+            "delivery_type": "hostel",
+            "hostel_name": "Himalaya",
+            "contact_number": "9876543210",
+            "alternate_contact_number": "",
+        },
+        headers=auth_headers(buyer_token),
+    )
+    assert order_response.status_code == 200
+    order_id = order_response.json()["order_id"]
+
+    create_admin(app_module)
+    admin_token = login(client, username="adminuser").json()["access_token"]
+    ready_response = client.put(
+        f"/admin/orders/{order_id}/status?status=ready",
+        headers=auth_headers(admin_token),
+    )
+    assert ready_response.status_code == 200
+
+    create_delivery_user(app_module)
+    delivery_token = login(client, username="deliveryuser").json()["access_token"]
+
+    delivery_orders_response = client.get("/delivery/orders", headers=auth_headers(delivery_token))
+    assert delivery_orders_response.status_code == 200
+    delivery_orders = delivery_orders_response.json()
+    assert len(delivery_orders) == 1
+    assert delivery_orders[0]["contact_number"] == "9876543210"
+    assert delivery_orders[0]["hostel_name"] == "Himalaya"
+    assert len(delivery_orders[0]["items"]) == 1
+
+    delivered_response = client.put(
+        f"/delivery/orders/{order_id}/delivered",
+        headers=auth_headers(delivery_token),
+    )
+    assert delivered_response.status_code == 200
+    assert delivered_response.json()["message"] == "Order marked delivered"
+
+    empty_response = client.get("/delivery/orders", headers=auth_headers(delivery_token))
+    assert empty_response.status_code == 200
+    assert empty_response.json() == []
 
 
 def test_order_and_print_queue_flow(client, app_module):

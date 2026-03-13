@@ -233,6 +233,14 @@ def get_current_admin_user(
     return current_user
 
 
+def get_current_delivery_user(
+    current_user: models.User = Depends(get_current_user),
+):
+    if current_user.role not in {"admin", "delivery"}:
+        raise HTTPException(status_code=403, detail="Delivery access required")
+    return current_user
+
+
 def normalize_mode(value: str | None):
     if not value:
         return None
@@ -595,6 +603,31 @@ def serialize_order(order: models.Order, include_user: bool = False):
             "username": order.user.username if order.user else "",
         }
     return payload
+
+
+def serialize_delivery_order(order: models.Order):
+    return {
+        "id": order.id,
+        "delivery_type": order.delivery_type,
+        "hostel_name": order.hostel_name,
+        "contact_number": order.contact_number,
+        "alternate_contact_number": order.alternate_contact_number,
+        "status": order.status,
+        "created_at": order.created_at.isoformat() if order.created_at else None,
+        "user": {
+            "id": order.user.id if order.user else None,
+            "username": order.user.username if order.user else "",
+        },
+        "items": [
+            {
+                "id": item.id,
+                "item_name": item.item_name or (item.book.name if item.book else item.original_filename or "Unnamed item"),
+                "quantity": item.quantity,
+                "stored_filename": item.stored_filename,
+            }
+            for item in order.items
+        ],
+    }
 
 
 def serialize_support_message(message: models.SupportMessage):
@@ -1419,6 +1452,51 @@ def admin_orders(
         .all()
     )
     return [serialize_order(order, include_user=True) for order in orders]
+
+
+@app.get("/delivery/orders")
+def delivery_orders(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_delivery_user),
+):
+    orders = (
+        db.query(models.Order)
+        .options(
+            joinedload(models.Order.items).joinedload(models.OrderItem.book),
+            joinedload(models.Order.items).joinedload(models.OrderItem.upload),
+            joinedload(models.Order.user),
+        )
+        .filter(models.Order.status.in_(["ready", "printing"]))
+        .order_by(models.Order.created_at.desc())
+        .all()
+    )
+    return [serialize_delivery_order(order) for order in orders]
+
+
+@app.put("/delivery/orders/{order_id}/delivered")
+def mark_delivery_order_delivered(
+    order_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_delivery_user),
+):
+    order = (
+        db.query(models.Order)
+        .options(joinedload(models.Order.items).joinedload(models.OrderItem.upload))
+        .filter(models.Order.id == order_id)
+        .first()
+    )
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    order.status = "delivered"
+    db.commit()
+    logger.info(
+        "delivery order marked delivered user_id=%s role=%s order_id=%s",
+        current_user.id,
+        current_user.role,
+        order_id,
+    )
+    return {"message": "Order marked delivered"}
 
 
 @app.get("/admin/support-threads")

@@ -12,10 +12,14 @@ import Cart from "./pages/Cart"
 import Checkout from "./pages/Checkout"
 import Login from "./pages/Login"
 import ProtectedRoute from "./components/ProtectedRoute"
+import Delivery from "./pages/Delivery"
+import { getUserRole } from "./utils/auth"
 
 
 function AppRoutes() {
   const location = useLocation()
+  const userRole = getUserRole()
+  const showBottomNav = !["admin", "delivery"].includes(userRole || "")
 
   return (
     <>
@@ -94,11 +98,19 @@ function AppRoutes() {
                 </ProtectedRoute>
               }
             />
+            <Route
+              path="/delivery"
+              element={
+                <ProtectedRoute role={["admin", "delivery"]}>
+                  <Delivery />
+                </ProtectedRoute>
+              }
+            />
           </Routes>
         </motion.div>
       </AnimatePresence>
 
-      <BottomNav />
+      {showBottomNav && <BottomNav />}
     </>
   )
 }
