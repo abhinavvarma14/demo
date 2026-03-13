@@ -351,6 +351,16 @@ def sync_schema():
             "total_price": "ALTER TABLE order_items ADD COLUMN total_price FLOAT DEFAULT 0",
             "printed": "ALTER TABLE order_items ADD COLUMN printed BOOLEAN DEFAULT FALSE",
         },
+        "support_threads": {
+            "status": "ALTER TABLE support_threads ADD COLUMN status VARCHAR DEFAULT 'open'",
+            "created_at": "ALTER TABLE support_threads ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+            "updated_at": "ALTER TABLE support_threads ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+        },
+        "support_messages": {
+            "user_id": "ALTER TABLE support_messages ADD COLUMN user_id INTEGER",
+            "sender_role": "ALTER TABLE support_messages ADD COLUMN sender_role VARCHAR DEFAULT 'user'",
+            "created_at": "ALTER TABLE support_messages ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+        },
     }
 
     with engine.begin() as connection:
@@ -382,6 +392,8 @@ def sync_schema():
             "CREATE INDEX IF NOT EXISTS ix_order_items_book_id ON order_items (book_id)",
             "CREATE INDEX IF NOT EXISTS ix_order_items_printed ON order_items (printed)",
             "CREATE INDEX IF NOT EXISTS ix_book_options_book_id ON book_options (book_id)",
+            "CREATE INDEX IF NOT EXISTS ix_support_threads_user_id ON support_threads (user_id)",
+            "CREATE INDEX IF NOT EXISTS ix_support_messages_thread_id ON support_messages (thread_id)",
         ]:
             connection.execute(text(statement))
 
@@ -567,6 +579,32 @@ def serialize_order(order: models.Order, include_user: bool = False):
         payload["user"] = {
             "id": order.user.id if order.user else None,
             "username": order.user.username if order.user else "",
+        }
+    return payload
+
+
+def serialize_support_message(message: models.SupportMessage):
+    return {
+        "id": message.id,
+        "user_id": message.user_id,
+        "sender_role": message.sender_role,
+        "message": message.message,
+        "created_at": message.created_at.isoformat() if message.created_at else None,
+    }
+
+
+def serialize_support_thread(thread: models.SupportThread, include_user: bool = False):
+    payload = {
+        "id": thread.id,
+        "status": thread.status,
+        "created_at": thread.created_at.isoformat() if thread.created_at else None,
+        "updated_at": thread.updated_at.isoformat() if thread.updated_at else None,
+        "messages": [serialize_support_message(message) for message in thread.messages],
+    }
+    if include_user:
+        payload["user"] = {
+            "id": thread.user.id if thread.user else None,
+            "username": thread.user.username if thread.user else "",
         }
     return payload
 
@@ -1247,6 +1285,94 @@ def my_orders(
     return [serialize_order(order) for order in orders]
 
 
+@app.get("/support-threads")
+def my_support_threads(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    threads = (
+        db.query(models.SupportThread)
+        .options(joinedload(models.SupportThread.messages))
+        .filter(models.SupportThread.user_id == current_user.id)
+        .order_by(models.SupportThread.updated_at.desc())
+        .all()
+    )
+    return [serialize_support_thread(thread) for thread in threads]
+
+
+@app.post("/support-threads")
+def create_support_thread(
+    payload: schemas.SupportMessageCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    now = datetime.now(timezone.utc)
+    thread = models.SupportThread(
+        user_id=current_user.id,
+        status="open",
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(thread)
+    db.flush()
+    db.add(
+        models.SupportMessage(
+            thread_id=thread.id,
+            user_id=current_user.id,
+            sender_role="user",
+            message=payload.message.strip(),
+            created_at=now,
+        )
+    )
+    db.commit()
+    db.refresh(thread)
+    logger.info("support thread created user_id=%s thread_id=%s", current_user.id, thread.id)
+    thread = (
+        db.query(models.SupportThread)
+        .options(joinedload(models.SupportThread.messages))
+        .filter(models.SupportThread.id == thread.id)
+        .first()
+    )
+    return serialize_support_thread(thread)
+
+
+@app.post("/support-threads/{thread_id}/messages")
+def add_support_message(
+    thread_id: int,
+    payload: schemas.SupportMessageCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    thread = (
+        db.query(models.SupportThread)
+        .options(joinedload(models.SupportThread.messages))
+        .filter(models.SupportThread.id == thread_id, models.SupportThread.user_id == current_user.id)
+        .first()
+    )
+    if not thread:
+        raise HTTPException(status_code=404, detail="Support thread not found")
+
+    thread.status = "open"
+    thread.updated_at = datetime.now(timezone.utc)
+    db.add(
+        models.SupportMessage(
+            thread_id=thread.id,
+            user_id=current_user.id,
+            sender_role="user",
+            message=payload.message.strip(),
+        )
+    )
+    db.commit()
+    thread = (
+        db.query(models.SupportThread)
+        .options(joinedload(models.SupportThread.messages))
+        .filter(models.SupportThread.id == thread.id)
+        .first()
+    )
+    logger.info("support reply added user_id=%s thread_id=%s", current_user.id, thread.id)
+    return serialize_support_thread(thread)
+
+
 @app.get("/admin/orders")
 def admin_orders(
     db: Session = Depends(get_db),
@@ -1263,6 +1389,57 @@ def admin_orders(
         .all()
     )
     return [serialize_order(order, include_user=True) for order in orders]
+
+
+@app.get("/admin/support-threads")
+def admin_support_threads(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    threads = (
+        db.query(models.SupportThread)
+        .options(joinedload(models.SupportThread.messages), joinedload(models.SupportThread.user))
+        .order_by(models.SupportThread.updated_at.desc())
+        .all()
+    )
+    return [serialize_support_thread(thread, include_user=True) for thread in threads]
+
+
+@app.post("/admin/support-threads/{thread_id}/reply")
+def admin_reply_support_thread(
+    thread_id: int,
+    payload: schemas.SupportMessageCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    thread = (
+        db.query(models.SupportThread)
+        .options(joinedload(models.SupportThread.messages), joinedload(models.SupportThread.user))
+        .filter(models.SupportThread.id == thread_id)
+        .first()
+    )
+    if not thread:
+        raise HTTPException(status_code=404, detail="Support thread not found")
+
+    thread.status = "answered"
+    thread.updated_at = datetime.now(timezone.utc)
+    db.add(
+        models.SupportMessage(
+            thread_id=thread.id,
+            user_id=current_user.id,
+            sender_role="admin",
+            message=payload.message.strip(),
+        )
+    )
+    db.commit()
+    thread = (
+        db.query(models.SupportThread)
+        .options(joinedload(models.SupportThread.messages), joinedload(models.SupportThread.user))
+        .filter(models.SupportThread.id == thread.id)
+        .first()
+    )
+    logger.info("admin replied support thread admin_id=%s thread_id=%s", current_user.id, thread.id)
+    return serialize_support_thread(thread, include_user=True)
 
 
 @app.get("/admin/analytics")

@@ -16,7 +16,6 @@ function BookCard({ book }) {
   const [quantity, setQuantity] = useState(1)
   const [hasAdded, setHasAdded] = useState(false)
   const [pulseKey, setPulseKey] = useState(0)
-  const [tilt, setTilt] = useState({ rotateX: 0, rotateY: 0 })
   const options = Array.isArray(book?.options) ? book.options : []
   const modes = useMemo(() => [...new Set(options.map((option) => option.mode))], [options])
   const [selectedMode, setSelectedMode] = useState(options[0]?.mode || "")
@@ -85,30 +84,16 @@ function BookCard({ book }) {
     }
   }
 
-  const handleTilt = (event) => {
-    const rect = event.currentTarget.getBoundingClientRect()
-    const px = (event.clientX - rect.left) / rect.width
-    const py = (event.clientY - rect.top) / rect.height
-    setTilt({
-      rotateX: (0.5 - py) * 8,
-      rotateY: (px - 0.5) * 10,
-    })
-  }
-
   return (
     <motion.article
-      whileHover={{ y: -6, scale: 1.01 }}
-      animate={tilt}
+      whileHover={{ y: -4 }}
       transition={{ type: "spring", stiffness: 260, damping: 22 }}
-      onMouseMove={handleTilt}
-      onMouseLeave={() => setTilt({ rotateX: 0, rotateY: 0 })}
-      style={{ transformStyle: "preserve-3d", perspective: 1200 }}
-      className="group relative overflow-hidden rounded-2xl border border-white/10 bg-white/5 p-3 shadow-lg backdrop-blur-lg"
+      className="group relative overflow-hidden rounded-2xl border border-yellow-400/20 bg-white/5 p-3 shadow-lg"
     >
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,_rgba(250,204,21,0.16),_transparent_38%),radial-gradient(circle_at_bottom_left,_rgba(255,255,255,0.12),_transparent_32%)] opacity-80" />
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,_rgba(250,204,21,0.12),_transparent_34%)] opacity-80" />
 
       <div className="relative">
-        <div className="absolute right-0 top-0 rounded-full bg-white/10 px-2 py-1 text-[10px] font-semibold text-yellow-400 backdrop-blur">
+        <div className="absolute right-0 top-0 rounded-full border border-yellow-400/30 bg-black px-2 py-1 text-[10px] font-semibold text-yellow-400">
           {book.year || "N/A"}
         </div>
 

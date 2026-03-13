@@ -9,6 +9,7 @@ function Admin({ defaultSection = "orders" }) {
   const [orders, setOrders] = useState([])
   const [printSummary, setPrintSummary] = useState([])
   const [books, setBooks] = useState([])
+  const [supportThreads, setSupportThreads] = useState([])
   const [analytics, setAnalytics] = useState({
     total_orders: 0,
     pending_orders: 0,
@@ -20,6 +21,7 @@ function Admin({ defaultSection = "orders" }) {
   const [actionLoading, setActionLoading] = useState("")
   const [activeSection, setActiveSection] = useState(defaultSection)
   const [newBook, setNewBook] = useState({ name: "", year: "" })
+  const [supportReplies, setSupportReplies] = useState({})
   const [newOption, setNewOption] = useState({
     book_id: "",
     mode: "",
@@ -77,10 +79,20 @@ function Admin({ defaultSection = "orders" }) {
     }
   }
 
+  const fetchSupportThreads = async () => {
+    try {
+      const res = await API.get("/admin/support-threads")
+      setSupportThreads(res.data)
+    } catch (err) {
+      console.log(err)
+      toast.error(getApiErrorMessage(err))
+    }
+  }
+
   useEffect(() => {
     const load = async () => {
       setLoading(true)
-      await Promise.all([fetchOrders(), fetchBooks(), fetchPrintSummary(), fetchAnalytics()])
+      await Promise.all([fetchOrders(), fetchBooks(), fetchPrintSummary(), fetchAnalytics(), fetchSupportThreads()])
       setLoading(false)
     }
 
@@ -88,7 +100,7 @@ function Admin({ defaultSection = "orders" }) {
   }, [])
 
   const refreshAdminData = async () => {
-    await Promise.all([fetchOrders(), fetchPrintSummary(), fetchAnalytics()])
+    await Promise.all([fetchOrders(), fetchPrintSummary(), fetchAnalytics(), fetchSupportThreads()])
   }
 
   const updateStatus = async (id, status) => {
@@ -298,6 +310,31 @@ function Admin({ defaultSection = "orders" }) {
     }
   }
 
+  const replyToSupportThread = async (threadId) => {
+    const message = (supportReplies[threadId] || "").trim()
+    if (!message) {
+      toast.error("Enter a reply")
+      return
+    }
+
+    try {
+      setActionLoading(`support-reply-${threadId}`)
+      const res = await API.post(`/admin/support-threads/${threadId}/reply`, {
+        message,
+      })
+      setSupportThreads((current) =>
+        current.map((thread) => (thread.id === threadId ? res.data : thread))
+      )
+      setSupportReplies((current) => ({ ...current, [threadId]: "" }))
+      toast.success("Reply sent")
+    } catch (error) {
+      console.log(error)
+      toast.error(getApiErrorMessage(error, "Failed to reply"))
+    } finally {
+      setActionLoading("")
+    }
+  }
+
   const paidOrders = orders.filter((order) => order.status !== "pending")
   const bulkCopies = printSummary.reduce((sum, item) => sum + item.quantity, 0)
 
@@ -474,6 +511,17 @@ function Admin({ defaultSection = "orders" }) {
           }`}
         >
           Print Queue
+        </button>
+
+        <button
+          onClick={() => goToSection("support")}
+          className={`flex-1 py-3 rounded-xl border transition ${
+            activeSection === "support"
+              ? "bg-yellow-400 text-black border-yellow-400"
+              : "bg-white/5 border-white/10 text-gray-300"
+          }`}
+        >
+          Support
         </button>
       </div>}
 
@@ -861,6 +909,89 @@ function Admin({ defaultSection = "orders" }) {
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {!loading && activeSection === "support" && (
+        <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+          <div className="flex items-center justify-between gap-3 mb-4">
+            <div>
+              <h2 className="text-lg font-semibold">
+                User Help
+              </h2>
+              <p className="text-sm text-gray-400">
+                User problems and admin replies
+              </p>
+            </div>
+            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-white/65">
+              {supportThreads.length} threads
+            </span>
+          </div>
+
+          {supportThreads.length === 0 && (
+            <p className="text-gray-400">
+              No help queries yet
+            </p>
+          )}
+
+          {supportThreads.map((thread) => (
+            <div key={thread.id} className="mb-4 rounded-xl border border-white/10 bg-white/5 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-white font-semibold">
+                    Query #{thread.id}
+                  </p>
+                  <p className="text-sm text-gray-400">
+                    User: {thread.user?.username || "Unknown user"}
+                  </p>
+                </div>
+                <span className="rounded-full bg-white/10 px-3 py-1 text-xs capitalize text-yellow-400">
+                  {thread.status}
+                </span>
+              </div>
+
+              <div className="mt-3 space-y-2">
+                {(thread.messages || []).map((message) => (
+                  <div
+                    key={message.id}
+                    className={`rounded-xl px-3 py-2 text-sm ${
+                      message.sender_role === "admin"
+                        ? "bg-yellow-400/10 text-yellow-300"
+                        : "bg-white/10 text-gray-200"
+                    }`}
+                  >
+                    <p className="text-xs uppercase tracking-[0.24em] text-white/45">
+                      {message.sender_role === "admin" ? "Admin" : "User"}
+                    </p>
+                    <p className="mt-1">
+                      {message.message}
+                    </p>
+                  </div>
+                ))}
+              </div>
+
+              <textarea
+                value={supportReplies[thread.id] || ""}
+                onChange={(event) =>
+                  setSupportReplies((current) => ({
+                    ...current,
+                    [thread.id]: event.target.value,
+                  }))
+                }
+                rows={3}
+                placeholder="Write your reply..."
+                className="mt-3 w-full rounded-xl border border-white/10 bg-white/5 p-3"
+              />
+
+              <button
+                onClick={() => replyToSupportThread(thread.id)}
+                disabled={actionLoading === `support-reply-${thread.id}`}
+                className="mt-3 rounded-xl bg-yellow-400 px-4 py-2 font-semibold text-black"
+              >
+                {actionLoading === `support-reply-${thread.id}` ? "Processing..." : "Send Reply"}
+              </button>
+            </div>
+          ))}
         </div>
       )}
 

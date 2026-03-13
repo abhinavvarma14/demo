@@ -122,10 +122,10 @@ def test_login_is_case_insensitive(client):
 
 
 def test_signup_rejects_weak_password(client):
-    response = signup(client, username="secureuser", password="weakpass")
+    response = signup(client, username="secureuser", password="123")
 
     assert response.status_code == 422
-    assert response.json()["detail"] == "Password must contain uppercase, lowercase, number, and symbol."
+    assert response.json()["detail"] == "Password must be at least 4 characters"
 
 
 def test_non_admin_cannot_access_dashboard(client):

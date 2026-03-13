@@ -20,6 +20,7 @@ class User(Base):
     uploads = relationship("Upload", back_populates="user", cascade="all, delete")
     cart_items = relationship("CartItem", back_populates="user", cascade="all, delete")
     orders = relationship("Order", back_populates="user", cascade="all, delete")
+    support_threads = relationship("SupportThread", back_populates="user", cascade="all, delete")
 
 
 class Book(Base):
@@ -143,3 +144,29 @@ class OrderItem(Base):
     order = relationship("Order", back_populates="items")
     upload = relationship("Upload", back_populates="order_items")
     book = relationship("Book", back_populates="order_items")
+
+
+class SupportThread(Base):
+    __tablename__ = "support_threads"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    status = Column(String, default="open")
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    user = relationship("User", back_populates="support_threads")
+    messages = relationship("SupportMessage", back_populates="thread", cascade="all, delete")
+
+
+class SupportMessage(Base):
+    __tablename__ = "support_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    thread_id = Column(Integer, ForeignKey("support_threads.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    sender_role = Column(String, nullable=False)
+    message = Column(String, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    thread = relationship("SupportThread", back_populates="messages")

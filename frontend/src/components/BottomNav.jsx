@@ -51,11 +51,11 @@ function BottomNav() {
   ]
 
   return (
-    <div className="fixed bottom-4 left-0 z-50 w-full px-4">
+    <div className="fixed bottom-3 left-1/2 z-50 -translate-x-1/2">
       <motion.div
         initial={{ opacity: 0, y: 24 }}
         animate={{ opacity: 1, y: 0 }}
-        className="mx-auto grid max-w-[360px] grid-cols-3 rounded-full border border-white/10 bg-white/5 px-2 py-2 shadow-[0_24px_60px_rgba(0,0,0,0.24)] backdrop-blur-xl"
+        className="grid min-w-[280px] grid-cols-3 rounded-full border border-yellow-400/35 bg-black px-1.5 py-1.5 shadow-[0_18px_40px_rgba(0,0,0,0.24)]"
       >
         {items.map((item) => {
           const Icon = item.icon
@@ -65,13 +65,13 @@ function BottomNav() {
               whileHover={{ y: -2 }}
               whileTap={{ scale: 0.94 }}
               onClick={item.onClick}
-              className={`relative flex flex-col items-center gap-0.5 rounded-full py-1.5 text-[11px] transition ${
-                item.active ? "text-yellow-400" : "text-gray-400"
+              className={`relative flex flex-col items-center gap-0.5 rounded-full px-3 py-1 text-[10px] transition ${
+                item.active ? "border border-yellow-400/35 bg-yellow-400/10 text-yellow-400" : "text-gray-400"
               }`}
             >
-              <Icon size={18} />
+              <Icon size={16} />
               {item.badge > 0 && (
-                <span className="absolute right-5 top-0 flex min-h-4 min-w-4 items-center justify-center rounded-full bg-yellow-400 px-1 text-[10px] font-bold text-black">
+                <span className="absolute right-3 top-0 flex min-h-4 min-w-4 items-center justify-center rounded-full bg-yellow-400 px-1 text-[9px] font-bold text-black">
                   {item.badge}
                 </span>
               )}

@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field, field_validator
 
 class UserCreate(BaseModel):
     username: str = Field(min_length=3, max_length=30)
-    password: str = Field(min_length=4, max_length=128)
+    password: str = Field(min_length=1, max_length=128)
 
     @field_validator("username")
     @classmethod
@@ -168,3 +168,15 @@ class PrintQueueAction(BaseModel):
         if normalized not in {"single", "double", "single_side", "double_side"}:
             raise ValueError("Print type must be single or double")
         return value
+
+
+class SupportMessageCreate(BaseModel):
+    message: str = Field(min_length=3, max_length=1000)
+
+    @field_validator("message")
+    @classmethod
+    def validate_message(cls, value: str):
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Message is required")
+        return normalized
