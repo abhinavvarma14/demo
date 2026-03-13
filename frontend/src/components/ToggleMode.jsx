@@ -37,7 +37,7 @@ function ToggleMode({ value, onChange, disabled = false }) {
             scale: [1, 1.04, 1],
           }}
           transition={{ type: "spring", stiffness: 300, damping: 24 }}
-          className="flex h-full w-[48%] items-center justify-center rounded-full bg-yellow-400 px-2 shadow-[0_10px_20px_rgba(250,204,21,0.24)]"
+          className="flex h-full w-[48%] items-center justify-center rounded-full bg-yellow-400 px-2 shadow-[0_6px_14px_rgba(250,204,21,0.14)]"
         >
           <motion.span
             key={value}

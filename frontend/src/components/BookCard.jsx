@@ -90,7 +90,7 @@ function BookCard({ book }) {
       transition={{ type: "spring", stiffness: 260, damping: 22 }}
       className="group relative overflow-hidden rounded-2xl border border-yellow-400/20 bg-white/5 p-3 shadow-lg"
     >
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,_rgba(250,204,21,0.12),_transparent_34%)] opacity-80" />
+      <div className="absolute inset-0 bg-[linear-gradient(180deg,_rgba(250,204,21,0.04),_transparent_22%),radial-gradient(circle_at_bottom_right,_rgba(250,204,21,0.06),_transparent_26%)] opacity-70" />
 
       <div className="relative">
         <div className="absolute right-0 top-0 rounded-full border border-yellow-400/30 bg-black px-2 py-1 text-[10px] font-semibold text-yellow-400">

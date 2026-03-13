@@ -54,7 +54,7 @@ function CartButton({ hasAdded, quantity, loading, onClick, pulseKey }) {
             type="button"
             onClick={onClick}
             disabled={loading}
-            className="flex items-center justify-center rounded-2xl bg-yellow-400 px-3 py-2 text-xs font-semibold text-black disabled:cursor-not-allowed disabled:opacity-70"
+          className="flex items-center justify-center rounded-2xl bg-yellow-400 px-3 py-2 text-xs font-semibold text-black shadow-[0_6px_14px_rgba(250,204,21,0.14)] disabled:cursor-not-allowed disabled:opacity-70"
           >
             {loading ? "Adding..." : `Add More (${quantity})`}
           </motion.button>

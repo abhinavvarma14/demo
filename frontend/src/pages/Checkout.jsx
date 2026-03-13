@@ -5,9 +5,18 @@ import toast from "react-hot-toast"
 import { getApiErrorMessage } from "../utils/apiError"
 
 function Checkout() {
+  const hostelOptions = [
+    "Himalaya",
+    "Lotus",
+    "Tulip",
+    "Aravali",
+    "Vindhya",
+    "Kailash",
+    "Outside Hostel",
+  ]
   const navigate = useNavigate()
   const [deliveryType, setDeliveryType] = useState("hostel")
-  const [hostel, setHostel] = useState("")
+  const [hostel, setHostel] = useState("Himalaya")
   const [contact, setContact] = useState("")
   const [alternate, setAlternate] = useState("")
   const [total, setTotal] = useState(0)
@@ -158,11 +167,17 @@ function Checkout() {
             Hostel Name
           </p>
 
-          <input
+          <select
             value={hostel}
             onChange={(e) => setHostel(e.target.value)}
             className="w-full bg-white/5 border border-white/10 rounded-xl p-3"
-          />
+          >
+            {hostelOptions.map((option) => (
+              <option key={option} value={option} className="bg-black text-white">
+                {option}
+              </option>
+            ))}
+          </select>
 
         </div>
 

@@ -11,11 +11,11 @@ function Navbar(){
 
   return(
 
-    <div className="fixed top-4 left-0 z-50 flex w-full justify-center px-4">
+    <div className="fixed top-3 left-1/2 z-50 flex -translate-x-1/2 justify-center px-4">
 
       <div className="w-full max-w-[460px] relative
       bg-white/5 backdrop-blur-xl border border-white/10
-      rounded-2xl px-4 py-4 flex items-center justify-center shadow-lg">
+      rounded-full px-5 py-3 flex items-center justify-center shadow-lg">
 
         <div
           onClick={()=>navigate("/")}
