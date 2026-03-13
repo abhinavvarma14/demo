@@ -40,7 +40,7 @@ function ProfilePage() {
 
   return (
     <div className="px-4 pb-28 pt-24">
-      <div className="rounded-[28px] border border-white/30 bg-white/20 p-5 shadow-[0_24px_60px_rgba(0,0,0,0.2)] backdrop-blur-xl">
+      <div className="rounded-[28px] border border-white/10 bg-white/5 p-5 shadow-[0_24px_60px_rgba(0,0,0,0.2)] backdrop-blur-xl">
         <p className="text-xs uppercase tracking-[0.34em] text-white/45">
           Profile
         </p>
@@ -52,12 +52,12 @@ function ProfilePage() {
         </p>
 
         <div className="mt-5 grid gap-3">
-          <div className="rounded-2xl border border-white/20 bg-white/10 p-4">
+          <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
             <p className="text-sm text-white/50">User details</p>
             <p className="mt-2 text-lg font-medium text-white">{username}</p>
           </div>
 
-          <div className="rounded-2xl border border-white/20 bg-white/10 p-4">
+          <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
             <p className="text-sm text-white/50">Settings</p>
             <p className="mt-2 text-sm text-white/75">
               Notifications and delivery preferences will live here next.
@@ -66,12 +66,12 @@ function ProfilePage() {
         </div>
       </div>
 
-      <div className="mt-6 rounded-[28px] border border-white/30 bg-white/20 p-5 shadow-[0_24px_60px_rgba(0,0,0,0.2)] backdrop-blur-xl">
+      <div className="mt-6 rounded-[28px] border border-white/10 bg-white/5 p-5 shadow-[0_24px_60px_rgba(0,0,0,0.2)] backdrop-blur-xl">
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-xl font-semibold text-white">
             Orders
           </h2>
-          <span className="rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-semibold text-white/65">
+          <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-white/65">
             {orders.length} total
           </span>
         </div>
@@ -101,7 +101,7 @@ function ProfilePage() {
               <p className="text-sm font-semibold text-white">
                 Order #{order.id}
               </p>
-              <span className="text-sm font-medium text-yellow-300">
+              <span className="text-sm font-medium text-yellow-400">
                 ₹{order.total_amount}
               </span>
             </div>

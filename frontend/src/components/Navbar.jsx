@@ -14,7 +14,7 @@ function Navbar(){
     <div className="fixed top-4 left-0 z-50 flex w-full justify-center px-4">
 
       <div className="w-full max-w-[460px] relative
-      bg-white/20 backdrop-blur-lg border-b border-white/30
+      bg-white/5 backdrop-blur-xl border border-white/10
       rounded-2xl px-4 py-4 flex items-center justify-center shadow-lg">
 
         <div
@@ -23,7 +23,7 @@ function Navbar(){
           flex items-center gap-2 cursor-pointer"
         >
           <span className="text-yellow-400 text-lg">🦇</span>
-          <span className="text-yellow-300 font-bold text-lg tracking-[0.24em] uppercase">
+          <span className="text-yellow-400 font-bold text-lg tracking-[0.24em] uppercase">
             BatPrint
           </span>
         </div>

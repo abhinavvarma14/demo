@@ -30,7 +30,7 @@ function CartButton({ hasAdded, quantity, loading, onClick, pulseKey }) {
         disabled={loading}
         className={`relative flex w-full items-center justify-center overflow-hidden rounded-2xl border px-4 py-3 text-sm font-semibold transition ${
           hasAdded
-            ? "border-yellow-300/30 bg-gradient-to-r from-yellow-400 to-amber-300 text-black shadow-[0_18px_36px_rgba(250,204,21,0.28)]"
+            ? "border-yellow-400/30 bg-gradient-to-r from-yellow-400 to-yellow-300 text-black shadow-[0_18px_36px_rgba(250,204,21,0.28)]"
             : "border-white/15 bg-white/10 text-white backdrop-blur-xl shadow-[0_18px_38px_rgba(0,0,0,0.22)]"
         } disabled:cursor-not-allowed disabled:opacity-70`}
       >
@@ -83,7 +83,7 @@ function CartButton({ hasAdded, quantity, loading, onClick, pulseKey }) {
               animate={{ opacity: [0, 1, 0], y: -36, x: 16, scale: 1.05 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.7 }}
-              className="pointer-events-none absolute right-10 top-4 text-xs font-bold text-yellow-300"
+              className="pointer-events-none absolute right-10 top-4 text-xs font-bold text-yellow-400"
             >
               +1
             </motion.div>

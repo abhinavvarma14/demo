@@ -26,7 +26,7 @@ function ToggleMode({ value, onChange, disabled = false }) {
       type="button"
       onClick={handleToggle}
       disabled={disabled}
-      className="relative w-full rounded-full border border-white/15 bg-white/8 px-2 py-2 backdrop-blur-xl shadow-[0_18px_45px_rgba(0,0,0,0.22)] disabled:cursor-not-allowed disabled:opacity-60"
+      className="relative w-full rounded-full border border-white/10 bg-white/5 px-2 py-2 backdrop-blur-xl shadow-[0_18px_45px_rgba(0,0,0,0.22)] disabled:cursor-not-allowed disabled:opacity-60"
     >
       <div className="flex items-center justify-between px-3 text-[11px] font-semibold uppercase tracking-[0.32em] text-white/45">
         <span>S</span>
@@ -44,7 +44,7 @@ function ToggleMode({ value, onChange, disabled = false }) {
             width: isDouble ? "58%" : "58%",
           }}
           transition={{ type: "spring", stiffness: 300, damping: 24 }}
-          className="flex h-full w-[58%] -translate-x-0 items-center rounded-full border border-white/30 bg-white/18 px-3 shadow-[0_12px_30px_rgba(0,0,0,0.28)] backdrop-blur-2xl"
+          className="flex h-full w-[58%] -translate-x-0 items-center rounded-full border border-white/20 bg-white/10 px-3 shadow-[0_12px_30px_rgba(0,0,0,0.28)] backdrop-blur-2xl"
         >
           <motion.div
             layout

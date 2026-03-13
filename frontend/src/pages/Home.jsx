@@ -71,7 +71,7 @@ function Home(){
 
       <div
         onClick={()=>navigate("/upload")}
-        className="mt-6 bg-white/20 backdrop-blur-xl border border-white/30 
+        className="mt-6 bg-white/5 backdrop-blur-xl border border-white/10 
         rounded-2xl p-6 flex flex-col items-center justify-center
         hover:border-yellow-400 transition cursor-pointer shadow-lg"
       >

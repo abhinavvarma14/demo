@@ -103,12 +103,12 @@ function BookCard({ book }) {
       onMouseMove={handleTilt}
       onMouseLeave={() => setTilt({ rotateX: 0, rotateY: 0 })}
       style={{ transformStyle: "preserve-3d", perspective: 1200 }}
-      className="group relative overflow-hidden rounded-2xl border border-white/30 bg-white/20 p-3 shadow-lg backdrop-blur-lg"
+      className="group relative overflow-hidden rounded-2xl border border-white/10 bg-white/5 p-3 shadow-lg backdrop-blur-lg"
     >
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,_rgba(250,204,21,0.16),_transparent_38%),radial-gradient(circle_at_bottom_left,_rgba(255,255,255,0.12),_transparent_32%)] opacity-80" />
 
       <div className="relative">
-        <div className="absolute right-0 top-0 rounded-full bg-white/40 px-2 py-1 text-[10px] font-semibold text-white backdrop-blur">
+        <div className="absolute right-0 top-0 rounded-full bg-white/10 px-2 py-1 text-[10px] font-semibold text-yellow-400 backdrop-blur">
           {book.year || "N/A"}
         </div>
 
@@ -125,7 +125,7 @@ function BookCard({ book }) {
             <p className="text-xs uppercase tracking-[0.28em] text-white/40">
               Price
             </p>
-            <p className="mt-1 text-2xl font-semibold text-yellow-300">
+            <p className="mt-1 text-2xl font-semibold text-yellow-400">
               ₹{selectedOption?.price || 0}
             </p>
             <p className="mt-1 text-[11px] text-white/45">
