@@ -108,13 +108,8 @@ function Admin({ defaultSection = "orders" }) {
     try {
       setActionLoading(`${id}-${status}`)
 
-      const res = await API.put(`/admin/orders/${id}/status?status=${status}`)
-
-      if (status === "delivered" && res.data.deleted_files > 0) {
-        toast.success("Order updated and uploaded file removed")
-      } else {
-        toast.success("Order updated")
-      }
+      await API.put(`/admin/orders/${id}/status?status=${status}`)
+      toast.success("Order updated")
 
       await refreshAdminData()
 
@@ -309,6 +304,20 @@ function Admin({ defaultSection = "orders" }) {
     } catch (error) {
       console.log(error)
       toast.error(getApiErrorMessage(error, "Failed to delete book"))
+    } finally {
+      setActionLoading("")
+    }
+  }
+
+  const deleteUploadedFile = async (itemId) => {
+    try {
+      setActionLoading(`delete-file-${itemId}`)
+      await API.delete(`/admin/order-items/${itemId}/file`)
+      toast.success("Uploaded file deleted")
+      await fetchOrders()
+    } catch (error) {
+      console.log(error)
+      toast.error(getApiErrorMessage(error, "Failed to delete uploaded file"))
     } finally {
       setActionLoading("")
     }
@@ -774,14 +783,24 @@ function Admin({ defaultSection = "orders" }) {
                     </p>
 
                     {item.stored_filename && (
-                      <a
-                        href={`${API_BASE_URL}/uploads/${item.stored_filename}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-yellow-400 underline text-sm block mt-1"
-                      >
-                        Download PDF
-                      </a>
+                      <div className="mt-2 flex gap-2">
+                        <a
+                          href={`${API_BASE_URL}/uploads/${item.stored_filename}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-yellow-400 underline text-sm"
+                        >
+                          Download PDF
+                        </a>
+
+                        <button
+                          onClick={() => deleteUploadedFile(item.id)}
+                          disabled={actionLoading === `delete-file-${item.id}`}
+                          className="text-red-400 text-sm"
+                        >
+                          {actionLoading === `delete-file-${item.id}` ? "Deleting..." : "Delete File"}
+                        </button>
+                      </div>
                     )}
                   </div>
                 ))}

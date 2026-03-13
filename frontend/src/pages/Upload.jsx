@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { useDropzone } from "react-dropzone"
 import * as pdfjsLib from "pdfjs-dist"
@@ -12,10 +12,13 @@ function Upload() {
   const [file, setFile] = useState(null)
   const [previewUrl, setPreviewUrl] = useState("")
   const [pages, setPages] = useState(0)
-  const [copies, setCopies] = useState(1)
-  const [price, setPrice] = useState(0)
-  const [loadingPrice, setLoadingPrice] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const price = useMemo(() => {
+    if (!file || pages <= 0) {
+      return 0
+    }
+    return (pages * 1.25) + 65
+  }, [file, pages])
 
   const onDrop = async (acceptedFiles) => {
     const selectedFile = acceptedFiles[0]
@@ -23,6 +26,8 @@ function Upload() {
 
     try {
       setFile(selectedFile)
+      setPreviewUrl("")
+      setPages(0)
       const reader = new FileReader()
       reader.onload = async function () {
         const typedarray = new Uint8Array(this.result)
@@ -56,33 +61,6 @@ function Upload() {
     accept: { "application/pdf": [] },
   })
 
-  useEffect(() => {
-    const fetchPrice = async () => {
-      if (!file || pages === 0) {
-        setPrice(0)
-        return
-      }
-
-      try {
-        setLoadingPrice(true)
-        const res = await API.get("/pricing/pdf", {
-          params: {
-            total_pages: pages,
-            copies,
-          },
-        })
-        setPrice(res.data.total_price)
-      } catch (error) {
-        console.log(error)
-        setPrice(0)
-      } finally {
-        setLoadingPrice(false)
-      }
-    }
-
-    fetchPrice()
-  }, [copies, file, pages])
-
   const addToCart = async () => {
     if (!isLoggedIn()) {
       toast.error("Please login to continue")
@@ -101,7 +79,7 @@ function Upload() {
       const formData = new FormData()
       formData.append("file", file)
       formData.append("total_pages", String(pages))
-      formData.append("quantity", String(copies))
+      formData.append("quantity", "1")
 
       const uploadRes = await API.post("/uploads/pdf", formData)
 
@@ -110,7 +88,7 @@ function Upload() {
         upload_id: uploadRes.data.id,
         stored_filename: uploadRes.data.stored_filename,
         total_pages: uploadRes.data.total_pages,
-        quantity: uploadRes.data.quantity,
+        quantity: 1,
       })
 
       toast.success("PDF added to cart")
@@ -169,32 +147,18 @@ function Upload() {
         </p>
       )}
 
-      <div className="mt-4">
-        <p className="text-gray-400 mb-2">
-          Copies
-        </p>
-
-        <input
-          type="number"
-          min="1"
-          value={copies}
-          onChange={(e) => setCopies(Number(e.target.value))}
-          className="w-full bg-white/5 border border-white/10 rounded-xl p-3"
-        />
-      </div>
-
       <div className="mt-6 bg-white/5 border border-white/10 rounded-2xl p-4">
         <p className="text-gray-400 text-sm">
           Total Price
         </p>
 
         <p className="text-2xl font-bold text-yellow-400">
-          {loadingPrice ? "Calculating..." : `₹${price}`}
+          ₹{price.toFixed(2)}
         </p>
 
         {pages > 0 && (
           <p className="mt-2 text-xs text-white/45">
-            Formula: ({pages} × {copies} × 1.25) + 60
+            Formula: ({pages} × 1.25) + 65
           </p>
         )}
       </div>

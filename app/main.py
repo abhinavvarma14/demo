@@ -33,7 +33,7 @@ LOGIN_WINDOW_SECONDS = int(os.getenv("LOGIN_WINDOW_SECONDS", "300"))
 LOGIN_MAX_ATTEMPTS = int(os.getenv("LOGIN_MAX_ATTEMPTS", "5"))
 login_attempts: dict[str, list[float]] = {}
 PDF_PRICE_PER_PAGE = 1.25
-PDF_BASE_CHARGE = 60.0
+PDF_BASE_CHARGE = 65.0
 
 def get_required_env(name: str) -> str:
     value = os.getenv(name)
@@ -276,7 +276,7 @@ def validate_print_type_or_raise(value: str | None):
 
 
 def calculate_pdf_total(total_pages: int, copies: int = 1) -> float:
-    return (total_pages * max(copies, 1) * PDF_PRICE_PER_PAGE) + PDF_BASE_CHARGE
+    return (total_pages * PDF_PRICE_PER_PAGE) + PDF_BASE_CHARGE
 
 
 VALID_ORDER_STATUSES = {"pending", "paid", "printing", "ready", "delivered"}
@@ -934,7 +934,7 @@ def get_pdf_quote(
         "price_per_page": PDF_PRICE_PER_PAGE,
         "base_charge": PDF_BASE_CHARGE,
         "total_pages": total_pages,
-        "copies": copies,
+        "copies": 1,
         "total_price": total_price,
     }
 
@@ -950,7 +950,7 @@ async def upload_pdf(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    copies = quantity or copies or 0
+    copies = 1
     if total_pages <= 0 or copies <= 0:
         raise HTTPException(status_code=400, detail="Pages and copies must be positive")
     if file.content_type != "application/pdf" and not (file.filename or "").lower().endswith(".pdf"):
@@ -968,7 +968,7 @@ async def upload_pdf(
     with destination.open("wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    total_price = calculate_pdf_total(total_pages, copies)
+    total_price = calculate_pdf_total(total_pages)
     upload = models.Upload(
         user_id=current_user.id,
         file_path=f"app/uploads/{stored_filename}",
@@ -1065,8 +1065,8 @@ def add_to_cart(
         if payload.total_pages and upload.total_pages != payload.total_pages:
             upload.total_pages = payload.total_pages
         if payload.quantity:
-            upload.copies = payload.quantity
-            upload.calculated_price = calculate_pdf_total(upload.total_pages, upload.copies)
+            upload.copies = 1
+            upload.calculated_price = calculate_pdf_total(upload.total_pages)
 
         line_total = upload.calculated_price
         unit_price = line_total / max(upload.copies, 1)
@@ -1523,18 +1523,14 @@ def update_order_status(
         raise HTTPException(status_code=404, detail="Order not found")
 
     order.status = status
-    deleted_files = 0
-    if status == "delivered":
-        deleted_files = cleanup_order_upload_files(order, db)
     db.commit()
     logger.info(
-        "admin updated order status admin_id=%s order_id=%s status=%s deleted_files=%s",
+        "admin updated order status admin_id=%s order_id=%s status=%s",
         current_user.id,
         order_id,
         status,
-        deleted_files,
     )
-    return {"message": "Order status updated", "deleted_files": deleted_files}
+    return {"message": "Order status updated"}
 
 
 @app.put("/admin/update-order-status/{order_id}")
@@ -1545,6 +1541,42 @@ def update_order_status_legacy(
     current_user: models.User = Depends(get_current_admin_user),
 ):
     return update_order_status(order_id=order_id, status=status, db=db, current_user=current_user)
+
+
+@app.delete("/admin/order-items/{item_id}/file")
+def delete_order_item_file(
+    item_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    item = (
+        db.query(models.OrderItem)
+        .options(joinedload(models.OrderItem.upload))
+        .filter(models.OrderItem.id == item_id)
+        .first()
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail="Order item not found")
+
+    if not item.stored_filename:
+        raise HTTPException(status_code=404, detail="Uploaded file not found")
+
+    file_path = UPLOAD_DIR / item.stored_filename
+    if file_path.exists():
+        try:
+            file_path.unlink()
+        except OSError:
+            logger.warning("failed to delete uploaded file item_id=%s path=%s", item.id, file_path)
+            raise HTTPException(status_code=500, detail="Unable to delete uploaded file")
+
+    item.stored_filename = None
+    if item.upload:
+        item.upload.stored_filename = None
+        item.upload.file_path = None
+
+    db.commit()
+    logger.info("admin deleted uploaded file admin_id=%s item_id=%s", current_user.id, item.id)
+    return {"message": "Uploaded file deleted"}
 
 
 @app.get("/admin/print-summary")
