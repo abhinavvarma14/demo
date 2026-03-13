@@ -217,6 +217,99 @@ def test_delivery_role_can_view_and_complete_delivery_orders(client, app_module)
     assert empty_response.json() == []
 
 
+def test_admin_can_reset_revenue(client, app_module):
+    signup(client, username="buyer")
+    buyer_token = login(client, username="buyer").json()["access_token"]
+
+    books_response = client.get("/books", headers=auth_headers(buyer_token))
+    first_book = books_response.json()[0]
+    first_option = first_book["options"][0]
+
+    client.post(
+        "/cart/items",
+        json={
+            "item_type": "book",
+            "book_id": first_book["id"],
+            "mode": first_option["mode"],
+            "print_type": first_option["print_type"],
+            "quantity": 1,
+        },
+        headers=auth_headers(buyer_token),
+    )
+    order_response = client.post(
+        "/orders",
+        json={
+            "delivery_type": "hostel",
+            "hostel_name": "Himalaya",
+            "contact_number": "9876543210",
+            "alternate_contact_number": "",
+        },
+        headers=auth_headers(buyer_token),
+    )
+    order_id = order_response.json()["order_id"]
+
+    create_admin(app_module)
+    admin_token = login(client, username="adminuser").json()["access_token"]
+    client.put(
+        f"/admin/orders/{order_id}/status?status=paid",
+        headers=auth_headers(admin_token),
+    )
+
+    dashboard_response = client.get("/admin/dashboard", headers=auth_headers(admin_token))
+    assert dashboard_response.status_code == 200
+    assert dashboard_response.json()["total_revenue"] > 0
+
+    reset_response = client.post("/admin/dashboard/reset-revenue", headers=auth_headers(admin_token))
+    assert reset_response.status_code == 200
+    assert reset_response.json()["total_revenue"] == 0.0
+
+    refreshed_dashboard = client.get("/admin/dashboard", headers=auth_headers(admin_token))
+    assert refreshed_dashboard.status_code == 200
+    assert refreshed_dashboard.json()["total_revenue"] == 0.0
+
+
+def test_book_can_have_simple_price_without_mode_or_side(client, app_module):
+    create_admin(app_module)
+    admin_token = login(client, username="adminuser").json()["access_token"]
+
+    create_book_response = client.post(
+        "/admin/books",
+        json={"name": "Simple Book", "year": "Y26"},
+        headers=auth_headers(admin_token),
+    )
+    assert create_book_response.status_code == 200
+    book_id = create_book_response.json()["id"]
+
+    option_response = client.post(
+        "/admin/book-options",
+        json={
+            "book_id": book_id,
+            "mode": "",
+            "print_type": "",
+            "price": 99,
+        },
+        headers=auth_headers(admin_token),
+    )
+    assert option_response.status_code == 200
+    assert option_response.json()["print_type"] == ""
+
+    signup(client, username="simplebuyer")
+    buyer_token = login(client, username="simplebuyer").json()["access_token"]
+
+    add_cart_response = client.post(
+        "/cart/items",
+        json={
+            "item_type": "book",
+            "book_id": book_id,
+            "quantity": 1,
+        },
+        headers=auth_headers(buyer_token),
+    )
+    assert add_cart_response.status_code == 200
+    assert add_cart_response.json()["print_type"] == ""
+    assert add_cart_response.json()["mode"] == ""
+
+
 def test_order_and_print_queue_flow(client, app_module):
     signup(client, username="buyer")
     buyer_token = login(client, username="buyer").json()["access_token"]

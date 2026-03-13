@@ -44,7 +44,7 @@ class BookUpdate(BaseModel):
 class BookOptionCreate(BaseModel):
     book_id: int
     mode: Optional[str] = None
-    print_type: str
+    print_type: Optional[str] = None
     price: float = Field(gt=0)
     max_copies: int = Field(default=15, gt=0)
 
@@ -57,8 +57,12 @@ class BookOptionCreate(BaseModel):
 
     @field_validator("print_type")
     @classmethod
-    def validate_print_type(cls, value: str):
+    def validate_print_type(cls, value: Optional[str]):
+        if value is None:
+            return ""
         normalized = value.strip().lower()
+        if not normalized:
+            return ""
         if normalized not in {"single", "double", "single_side", "double_side"}:
             raise ValueError("Print type must be single or double")
         return value
@@ -69,6 +73,18 @@ class BookOptionUpdate(BaseModel):
     print_type: Optional[str] = None
     price: Optional[float] = None
     max_copies: Optional[int] = None
+
+    @field_validator("print_type")
+    @classmethod
+    def validate_optional_print_type_value(cls, value: Optional[str]):
+        if value is None:
+            return value
+        normalized = value.strip().lower()
+        if not normalized:
+            return ""
+        if normalized not in {"single", "double", "single_side", "double_side"}:
+            raise ValueError("Print type must be single or double")
+        return value
 
 
 class CartItemCreate(BaseModel):

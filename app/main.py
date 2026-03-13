@@ -32,8 +32,10 @@ logger = logging.getLogger("batprint")
 LOGIN_WINDOW_SECONDS = int(os.getenv("LOGIN_WINDOW_SECONDS", "300"))
 LOGIN_MAX_ATTEMPTS = int(os.getenv("LOGIN_MAX_ATTEMPTS", "5"))
 login_attempts: dict[str, list[float]] = {}
-PDF_PRICE_PER_PAGE = 1.25
-PDF_BASE_CHARGE = 65.0
+PDF_SINGLE_PRICE_PER_PAGE = 1.25
+PDF_SINGLE_BASE_CHARGE = 65.0
+PDF_DOUBLE_PRICE_PER_PAGE = 1.15
+PDF_DOUBLE_BASE_CHARGE = 62.0
 
 def get_required_env(name: str) -> str:
     value = os.getenv(name)
@@ -258,7 +260,7 @@ def normalize_mode(value: str | None):
 
 def normalize_print_type(value: str | None):
     if not value:
-        return None
+        return ""
     normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
     mapping = {
         "single_side": "single",
@@ -283,8 +285,24 @@ def validate_print_type_or_raise(value: str | None):
     return normalized
 
 
-def calculate_pdf_total(total_pages: int, copies: int = 1) -> float:
-    return (total_pages * PDF_PRICE_PER_PAGE) + PDF_BASE_CHARGE
+def get_pdf_pricing_values(print_type: str | None):
+    normalized_print_type = normalize_print_type(print_type) or "single"
+    if normalized_print_type == "double":
+        return {
+            "print_type": "double",
+            "price_per_page": PDF_DOUBLE_PRICE_PER_PAGE,
+            "base_charge": PDF_DOUBLE_BASE_CHARGE,
+        }
+    return {
+        "print_type": "single",
+        "price_per_page": PDF_SINGLE_PRICE_PER_PAGE,
+        "base_charge": PDF_SINGLE_BASE_CHARGE,
+    }
+
+
+def calculate_pdf_total(total_pages: int, print_type: str | None = None) -> float:
+    pricing = get_pdf_pricing_values(print_type)
+    return (total_pages * pricing["price_per_page"]) + pricing["base_charge"]
 
 
 VALID_ORDER_STATUSES = {"pending", "paid", "printing", "ready", "delivered"}
@@ -466,10 +484,12 @@ def get_pdf_pricing_rule(db: Session, mode: str, print_type: str):
 
 def get_book_option(db: Session, book_id: int, mode: str, print_type: str):
     normalized_mode = (mode or "").strip()
-    query = db.query(models.BookOption).filter(
-        models.BookOption.book_id == book_id,
-        models.BookOption.print_type == normalize_print_type(print_type),
-    )
+    normalized_print_type = normalize_print_type(print_type)
+    query = db.query(models.BookOption).filter(models.BookOption.book_id == book_id)
+    if normalized_print_type:
+        query = query.filter(models.BookOption.print_type == normalized_print_type)
+    else:
+        query = query.filter(or_(models.BookOption.print_type.is_(None), models.BookOption.print_type == ""))
     if normalized_mode:
         query = query.filter(models.BookOption.mode == normalized_mode)
     else:
@@ -603,6 +623,23 @@ def serialize_order(order: models.Order, include_user: bool = False):
             "username": order.user.username if order.user else "",
         }
     return payload
+
+
+def get_setting_value(db: Session, key: str, default: str | None = None) -> str | None:
+    setting = db.query(models.AppSetting).filter(models.AppSetting.key == key).first()
+    return setting.value if setting else default
+
+
+def set_setting_value(db: Session, key: str, value: str):
+    setting = db.query(models.AppSetting).filter(models.AppSetting.key == key).first()
+    if not setting:
+        setting = models.AppSetting(key=key, value=value)
+        db.add(setting)
+    else:
+        setting.value = value
+    db.commit()
+    db.refresh(setting)
+    return setting
 
 
 def serialize_delivery_order(order: models.Order):
@@ -960,12 +997,13 @@ def get_pdf_quote(
     if total_pages <= 0 or copies <= 0:
         raise HTTPException(status_code=400, detail="Pages and copies must be positive")
 
-    total_price = calculate_pdf_total(total_pages, copies)
+    pricing = get_pdf_pricing_values(print_type)
+    total_price = calculate_pdf_total(total_pages, print_type)
     return {
         "mode": None,
-        "print_type": None,
-        "price_per_page": PDF_PRICE_PER_PAGE,
-        "base_charge": PDF_BASE_CHARGE,
+        "print_type": pricing["print_type"],
+        "price_per_page": pricing["price_per_page"],
+        "base_charge": pricing["base_charge"],
         "total_pages": total_pages,
         "copies": 1,
         "total_price": total_price,
@@ -1003,7 +1041,7 @@ async def upload_pdf(
     with destination.open("wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    total_price = calculate_pdf_total(total_pages)
+    total_price = calculate_pdf_total(total_pages, normalized_print_type)
     upload = models.Upload(
         user_id=current_user.id,
         file_path=f"app/uploads/{stored_filename}",
@@ -1042,10 +1080,9 @@ def add_to_cart(
     item_type = payload.item_type.lower()
 
     if item_type == "book":
-        if not payload.book_id or not payload.print_type:
-            raise HTTPException(status_code=400, detail="Book items require book and print type")
+        if not payload.book_id:
+            raise HTTPException(status_code=400, detail="Book id is required")
 
-        validate_print_type_or_raise(payload.print_type)
         book = db.query(models.Book).filter(models.Book.id == payload.book_id).first()
         if not book:
             raise HTTPException(status_code=404, detail="Book not found")
@@ -1101,9 +1138,10 @@ def add_to_cart(
             upload.total_pages = payload.total_pages
         if payload.quantity:
             upload.copies = 1
-            upload.calculated_price = calculate_pdf_total(upload.total_pages)
+            upload.calculated_price = calculate_pdf_total(upload.total_pages, upload.print_type)
         if payload.print_type:
             upload.print_type = validate_print_type_or_raise(payload.print_type)
+            upload.calculated_price = calculate_pdf_total(upload.total_pages, upload.print_type)
 
         line_total = upload.calculated_price
         unit_price = line_total / max(upload.copies, 1)
@@ -1568,12 +1606,13 @@ def admin_analytics(
         .scalar()
         or 0
     )
+    revenue_offset = float(get_setting_value(db, "revenue_offset", "0") or 0)
     return {
         "total_orders": int(total_orders),
         "pending_orders": int(pending_orders),
         "printing_orders": int(printing_orders),
         "completed_orders": int(completed_orders),
-        "total_revenue": float(total_revenue),
+        "total_revenue": max(float(total_revenue) - revenue_offset, 0.0),
     }
 
 
@@ -1583,6 +1622,22 @@ def admin_dashboard(
     current_user: models.User = Depends(get_current_admin_user),
 ):
     return admin_analytics(db=db, current_user=current_user)
+
+
+@app.post("/admin/dashboard/reset-revenue")
+def admin_reset_revenue(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    gross_revenue = (
+        db.query(func.coalesce(func.sum(models.Order.total_amount), 0))
+        .filter(models.Order.status.in_(["paid", "printing", "ready", "delivered"]))
+        .scalar()
+        or 0
+    )
+    set_setting_value(db, "revenue_offset", str(float(gross_revenue)))
+    logger.info("admin reset revenue admin_id=%s gross_revenue=%s", current_user.id, gross_revenue)
+    return {"message": "Revenue reset", "total_revenue": 0.0}
 
 
 @app.put("/admin/orders/{order_id}/status")

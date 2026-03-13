@@ -25,8 +25,11 @@ function Upload() {
     if (!file || pages <= 0) {
       return 0
     }
+    if (printType === "double") {
+      return (pages * 1.15) + 62
+    }
     return (pages * 1.25) + 65
-  }, [file, pages])
+  }, [file, pages, printType])
 
   const onDrop = async (acceptedFiles) => {
     const selectedFile = acceptedFiles[0]

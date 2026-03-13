@@ -18,13 +18,18 @@ function BookCard({ book }) {
   const [hasAdded, setHasAdded] = useState(false)
   const [pulseKey, setPulseKey] = useState(0)
   const options = Array.isArray(book?.options) ? book.options : []
+  const printTypeOptions = useMemo(
+    () => [...new Set(options.map((option) => option.print_type || "").filter((value) => value !== undefined))],
+    [options]
+  )
   const modeOptions = useMemo(
     () => [...new Set(options.map((option) => normalizeModeValue(option.mode)).filter(Boolean))],
     [options]
   )
   const hasModeSelector = modeOptions.length > 0
+  const hasSideSelector = printTypeOptions.some(Boolean)
   const [selectedMode, setSelectedMode] = useState(normalizeModeValue(options[0]?.mode))
-  const [selectedPrintType, setSelectedPrintType] = useState("single")
+  const [selectedPrintType, setSelectedPrintType] = useState(options[0]?.print_type || "")
 
   const availableOptions = useMemo(() => {
     if (!hasModeSelector) {
@@ -35,7 +40,7 @@ function BookCard({ book }) {
   }, [hasModeSelector, options, selectedMode])
 
   const selectedOption =
-    availableOptions.find((option) => option.print_type === selectedPrintType) ||
+    availableOptions.find((option) => (option.print_type || "") === selectedPrintType) ||
     availableOptions[0] ||
     options[0]
 
@@ -47,16 +52,16 @@ function BookCard({ book }) {
 
   useEffect(() => {
     if (availableOptions.length === 0) {
-      setSelectedPrintType("single")
+      setSelectedPrintType("")
       return
     }
 
     const matchingOption = availableOptions.find(
-      (option) => option.print_type === selectedPrintType
+      (option) => (option.print_type || "") === selectedPrintType
     )
 
     if (!matchingOption) {
-      setSelectedPrintType(availableOptions[0].print_type)
+      setSelectedPrintType(availableOptions[0].print_type || "")
     }
   }, [availableOptions, selectedPrintType])
 
@@ -78,7 +83,7 @@ function BookCard({ book }) {
         item_type: "book",
         book_id: book.id,
         mode: selectedOption.mode || undefined,
-        print_type: selectedOption.print_type,
+        print_type: selectedOption.print_type || undefined,
         quantity,
       })
       setHasAdded(true)
@@ -132,17 +137,19 @@ function BookCard({ book }) {
           </div>
         </div>
 
-        <div className={`mt-4 grid ${hasModeSelector ? "grid-cols-2" : "grid-cols-1"} gap-2`}>
-          <div>
-            <p className="mb-2 text-[11px] uppercase tracking-[0.28em] text-white/40">
-              Side
-            </p>
-            <ModeToggle
-              value={selectedPrintType}
-              onChange={setSelectedPrintType}
-              disabled={!selectedOption}
-            />
-          </div>
+        <div className={`mt-4 grid ${hasModeSelector && hasSideSelector ? "grid-cols-2" : "grid-cols-1"} gap-2`}>
+          {hasSideSelector && (
+            <div>
+              <p className="mb-2 text-[11px] uppercase tracking-[0.28em] text-white/40">
+                Side
+              </p>
+              <ModeToggle
+                value={selectedPrintType}
+                onChange={setSelectedPrintType}
+                disabled={!selectedOption}
+              />
+            </div>
+          )}
 
           {hasModeSelector && (
             <div>

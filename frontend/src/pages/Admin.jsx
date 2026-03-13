@@ -137,6 +137,23 @@ function Admin({ defaultSection = "orders" }) {
     }
   }
 
+  const resetRevenue = async () => {
+    try {
+      setActionLoading("reset-revenue")
+      const res = await API.post("/admin/dashboard/reset-revenue")
+      setAnalytics((current) => ({
+        ...current,
+        total_revenue: res.data.total_revenue ?? 0,
+      }))
+      toast.success("Revenue reset")
+    } catch (error) {
+      console.log(error)
+      toast.error(getApiErrorMessage(error, "Failed to reset revenue"))
+    } finally {
+      setActionLoading("")
+    }
+  }
+
   const startPrinting = async (item) => {
     try {
       setActionLoading(`queue-start-${item.item_name}-${item.mode}-${item.print_type}`)
@@ -409,12 +426,24 @@ function Admin({ defaultSection = "orders" }) {
         </div>
 
         <div className="bg-white/5 border border-white/10 rounded-xl p-4 col-span-2">
-          <p className="text-gray-400 text-sm">
-            Total Revenue
-          </p>
-          <p className="text-2xl font-bold text-yellow-400 mt-1">
-            ₹{Number(analytics.total_revenue || 0).toFixed(2)}
-          </p>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-gray-400 text-sm">
+                Total Revenue
+              </p>
+              <p className="text-2xl font-bold text-yellow-400 mt-1">
+                ₹{Number(analytics.total_revenue || 0).toFixed(2)}
+              </p>
+            </div>
+
+            <button
+              onClick={resetRevenue}
+              disabled={actionLoading === "reset-revenue"}
+              className="rounded-xl bg-white/10 px-4 py-2 text-sm font-semibold text-white"
+            >
+              {actionLoading === "reset-revenue" ? "Processing..." : "Reset Revenue"}
+            </button>
+          </div>
         </div>
 
         <div className="bg-white/5 border border-white/10 rounded-xl p-4 col-span-2">
@@ -602,6 +631,9 @@ function Admin({ defaultSection = "orders" }) {
                 onChange={(event) => setNewOption((current) => ({ ...current, print_type: event.target.value }))}
                 className="bg-white/5 border border-white/10 rounded-xl p-3"
               >
+                <option value="">
+                  No side selection
+                </option>
                 <option value="single">
                   Single
                 </option>
@@ -692,10 +724,13 @@ function Admin({ defaultSection = "orders" }) {
                       />
 
                       <select
-                        value={option.print_type || "single"}
+                        value={option.print_type || ""}
                         onChange={(event) => handleOptionChange(book.id, option.id, "print_type", event.target.value)}
                         className="bg-white/5 border border-white/10 rounded-xl p-3"
                       >
+                        <option value="">
+                          No side selection
+                        </option>
                         <option value="single">
                           Single
                         </option>
