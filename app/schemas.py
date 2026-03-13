@@ -43,18 +43,17 @@ class BookUpdate(BaseModel):
 
 class BookOptionCreate(BaseModel):
     book_id: int
-    mode: str
+    mode: Optional[str] = None
     print_type: str
     price: float = Field(gt=0)
     max_copies: int = Field(default=15, gt=0)
 
     @field_validator("mode")
     @classmethod
-    def validate_mode(cls, value: str):
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("Mode is required")
-        return normalized
+    def validate_mode(cls, value: Optional[str]):
+        if value is None:
+            return ""
+        return value.strip()
 
     @field_validator("print_type")
     @classmethod

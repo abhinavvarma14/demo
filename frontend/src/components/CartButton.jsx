@@ -14,7 +14,7 @@ function CartButton({ hasAdded, quantity, loading, onClick, pulseKey }) {
           type="button"
           onClick={onClick}
           disabled={loading}
-          className="relative flex w-full items-center justify-center overflow-hidden rounded-2xl border border-yellow-400/35 bg-black px-3 py-2 text-xs font-semibold text-yellow-400 transition disabled:cursor-not-allowed disabled:opacity-70"
+          className="relative flex w-full items-center justify-center overflow-hidden rounded-2xl bg-black px-3 py-2 text-xs font-semibold text-yellow-400 transition disabled:cursor-not-allowed disabled:opacity-70"
         >
           <motion.div
             initial={false}
@@ -43,7 +43,7 @@ function CartButton({ hasAdded, quantity, loading, onClick, pulseKey }) {
         </motion.button>
       ) : (
         <div className="grid grid-cols-[1fr,1.2fr] gap-2">
-          <div className="flex items-center justify-center rounded-2xl border border-yellow-400/35 bg-black px-3 py-2 text-xs font-semibold text-yellow-400">
+          <div className="flex items-center justify-center rounded-2xl bg-black px-3 py-2 text-xs font-semibold text-yellow-400">
             <Check size={14} className="mr-1.5" />
             Added
           </div>
@@ -70,7 +70,7 @@ function CartButton({ hasAdded, quantity, loading, onClick, pulseKey }) {
               animate={{ opacity: 1, y: -22, scale: 1 }}
               exit={{ opacity: 0, y: -36, scale: 0.88 }}
               transition={{ duration: 0.4 }}
-              className="pointer-events-none absolute right-3 top-0 rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-semibold text-white backdrop-blur-xl"
+              className="pointer-events-none absolute right-3 top-0 rounded-full bg-white/10 px-3 py-1 text-xs font-semibold text-white backdrop-blur-xl"
             >
               Added ✓
             </motion.div>

@@ -812,7 +812,7 @@ def create_book_option(
 
     option = models.BookOption(
         book_id=payload.book_id,
-        mode=payload.mode.strip(),
+        mode=(payload.mode or "").strip(),
         print_type=normalize_print_type(payload.print_type),
         price=payload.price,
         max_copies=payload.max_copies,

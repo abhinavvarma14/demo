@@ -11,7 +11,7 @@ function QuantityControl({ quantity, onDecrease, onIncrease, visible }) {
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: 8, scale: 0.96 }}
           transition={{ type: "spring", stiffness: 320, damping: 26 }}
-          className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-2.5 py-2 backdrop-blur-xl"
+          className="flex items-center justify-between rounded-2xl bg-white/5 px-2.5 py-2 backdrop-blur-xl"
         >
           <span className="text-xs font-medium uppercase tracking-[0.28em] text-white/45">
             Copies
@@ -22,7 +22,7 @@ function QuantityControl({ quantity, onDecrease, onIncrease, visible }) {
               whileTap={{ scale: 0.92 }}
               type="button"
               onClick={onDecrease}
-              className="flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white"
+              className="flex h-8 w-8 items-center justify-center rounded-full bg-white/5 text-white"
             >
               <Minus size={16} />
             </motion.button>
@@ -40,7 +40,7 @@ function QuantityControl({ quantity, onDecrease, onIncrease, visible }) {
               whileTap={{ scale: 0.92 }}
               type="button"
               onClick={onIncrease}
-              className="flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-yellow-400 text-black shadow-[0_12px_24px_rgba(250,204,21,0.25)]"
+              className="flex h-8 w-8 items-center justify-center rounded-full bg-yellow-400 text-black shadow-[0_10px_20px_rgba(250,204,21,0.18)]"
             >
               <Plus size={16} />
             </motion.button>

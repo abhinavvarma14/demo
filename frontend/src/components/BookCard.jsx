@@ -101,7 +101,7 @@ function BookCard({ book }) {
       <div className="absolute inset-0 bg-[linear-gradient(180deg,_rgba(255,255,255,0.04),_transparent_24%),radial-gradient(circle_at_bottom_right,_rgba(255,255,255,0.05),_transparent_28%)] opacity-70" />
 
       <div className="relative">
-        <div className="absolute right-0 top-0 rounded-full border border-yellow-400/30 bg-black px-2 py-1 text-[10px] font-semibold text-yellow-400">
+        <div className="absolute right-0 top-0 rounded-full bg-black px-2 py-1 text-[10px] font-semibold text-yellow-400">
           {book.year || "N/A"}
         </div>
 

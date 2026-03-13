@@ -195,8 +195,8 @@ function Admin({ defaultSection = "orders" }) {
   }
 
   const createBookOption = async () => {
-    if (!newOption.book_id || !newOption.mode || !newOption.price) {
-      toast.error("Fill all option fields")
+    if (!newOption.book_id || !newOption.price) {
+      toast.error("Fill book, print type, and price")
       return
     }
 
@@ -581,7 +581,7 @@ function Admin({ defaultSection = "orders" }) {
               <input
                 value={newOption.mode}
                 onChange={(event) => setNewOption((current) => ({ ...current, mode: event.target.value }))}
-                placeholder="Mode (A / R / black_white)"
+                placeholder="Mode (optional)"
                 className="bg-white/5 border border-white/10 rounded-xl p-3"
               />
 

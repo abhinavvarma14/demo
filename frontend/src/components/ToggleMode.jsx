@@ -24,7 +24,7 @@ function ToggleMode({ value, onChange, disabled = false }) {
       type="button"
       onClick={handleToggle}
       disabled={disabled}
-      className="relative h-8 w-full rounded-full border border-yellow-400/35 bg-black px-1 disabled:cursor-not-allowed disabled:opacity-60"
+      className="relative h-8 w-full rounded-full bg-black px-1 disabled:cursor-not-allowed disabled:opacity-60"
     >
       <motion.div
         layout
