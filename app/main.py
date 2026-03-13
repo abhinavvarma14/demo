@@ -100,6 +100,8 @@ app.add_middleware(
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     first_error = exc.errors()[0] if exc.errors() else None
     message = first_error.get("msg", "Invalid request") if first_error else "Invalid request"
+    if message.startswith("Value error, "):
+        message = message.replace("Value error, ", "", 1)
     return JSONResponse(status_code=422, content={"detail": message})
 
 def get_db():
@@ -111,7 +113,7 @@ def get_db():
 
 
 def sanitize_username(value: str) -> str:
-    return value.strip()
+    return value.strip().lower()
 
 
 def hash_password(password: str) -> str:
@@ -575,11 +577,11 @@ def login(
     if not db_user:
         record_failed_login(login_key)
         logger.warning("login failed unknown username=%s client=%s", username, request.client.host if request.client else "unknown")
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=404, detail="No user found. Please sign up.")
     if not verify_password(form_data.password, db_user.password_hash):
         record_failed_login(login_key)
         logger.warning("login failed bad password username=%s client=%s", username, request.client.host if request.client else "unknown")
-        raise HTTPException(status_code=401, detail="Incorrect password")
+        raise HTTPException(status_code=401, detail="Incorrect password.")
 
     if not is_password_hashed(db_user.password_hash):
         db_user.password_hash = hash_password(form_data.password)

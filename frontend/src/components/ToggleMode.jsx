@@ -4,11 +4,11 @@ import { motion } from "framer-motion"
 const labels = {
   single: {
     short: "S",
-    full: "Single Side",
+    full: "Single",
   },
   double: {
     short: "D",
-    full: "Double Side",
+    full: "Double",
   },
 }
 

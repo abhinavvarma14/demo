@@ -50,21 +50,21 @@ def client(app_module, reset_db):
         yield test_client
 
 
-def signup(client, username="testuser", password="strongpass123"):
+def signup(client, username="testuser", password="Strongpass123!"):
     return client.post(
         "/signup",
         json={"username": username, "password": password},
     )
 
 
-def login(client, username="testuser", password="strongpass123"):
+def login(client, username="testuser", password="Strongpass123!"):
     return client.post(
         "/login",
         data={"username": username, "password": password},
     )
 
 
-def create_admin(app_module, username="adminuser", password="strongpass123"):
+def create_admin(app_module, username="adminuser", password="Strongpass123!"):
     db = app_module.SessionLocal()
     try:
         admin = app_module.models.User(
@@ -93,10 +93,10 @@ def test_signup_rejects_duplicate_username(client):
 
 def test_login_rejects_invalid_credentials(client):
     signup(client)
-    response = login(client, password="wrongpass123")
+    response = login(client, password="Wrongpass123!")
 
     assert response.status_code == 401
-    assert response.json()["detail"] == "Incorrect password"
+    assert response.json()["detail"] == "Incorrect password."
 
 
 def test_invalid_token_returns_401(client):
@@ -110,7 +110,22 @@ def test_login_returns_user_not_found_for_missing_user(client):
     response = login(client, username="missing-user")
 
     assert response.status_code == 404
-    assert response.json()["detail"] == "User not found"
+    assert response.json()["detail"] == "No user found. Please sign up."
+
+
+def test_login_is_case_insensitive(client):
+    signup(client, username="AbHiNaV", password="Strongpass123!")
+    response = login(client, username="ABHINAV", password="Strongpass123!")
+
+    assert response.status_code == 200
+    assert response.json()["access_token"]
+
+
+def test_signup_rejects_weak_password(client):
+    response = signup(client, username="secureuser", password="weakpass")
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Password must contain uppercase, lowercase, number, and symbol."
 
 
 def test_non_admin_cannot_access_dashboard(client):

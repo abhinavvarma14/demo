@@ -3,12 +3,14 @@ import { useNavigate } from "react-router-dom"
 import { Upload } from "lucide-react"
 import API from "../api/api"
 import BookCard from "../components/BookCard"
+import SearchBar from "../components/SearchBar"
 import toast from "react-hot-toast"
 import { getApiErrorMessage } from "../utils/apiError"
 
 function Home(){
   const navigate = useNavigate()
   const [books, setBooks] = useState([])
+  const [search, setSearch] = useState("")
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -27,13 +29,24 @@ function Home(){
     fetchBooks()
   }, [])
 
+  const filteredBooks = books.filter((book) =>
+    book.name.toLowerCase().includes(search.trim().toLowerCase())
+  )
+
   return(
 
     <div className="pt-28 pb-24 px-4">
+      <div className="mb-5">
+        <SearchBar
+          value={search}
+          onChange={setSearch}
+          placeholder="Search books, years, or editions"
+        />
+      </div>
 
       {/* Books Grid */}
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <div className="grid grid-cols-2 gap-3">
         {loading && (
           <>
             {[1, 2, 3, 4].map((item) => (
@@ -48,7 +61,7 @@ function Home(){
           </div>
         )}
 
-        {books.map((book) => (
+        {filteredBooks.map((book) => (
           <BookCard key={book.id} book={book} />
         ))}
 
@@ -58,9 +71,9 @@ function Home(){
 
       <div
         onClick={()=>navigate("/upload")}
-        className="mt-6 bg-white/5 backdrop-blur-xl border border-white/10 
+        className="mt-6 bg-white/20 backdrop-blur-xl border border-white/30 
         rounded-2xl p-6 flex flex-col items-center justify-center
-        hover:border-yellow-400 transition cursor-pointer"
+        hover:border-yellow-400 transition cursor-pointer shadow-lg"
       >
 
         <Upload size={36} className="text-yellow-400 mb-3"/>

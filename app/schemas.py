@@ -1,4 +1,5 @@
 from typing import Literal, Optional
+import re
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -10,12 +11,19 @@ class UserCreate(BaseModel):
     @field_validator("username")
     @classmethod
     def validate_username(cls, value: str):
-        normalized = value.strip()
+        normalized = value.strip().lower()
         if not normalized:
             raise ValueError("Username is required")
         if not normalized.replace("_", "").isalnum():
             raise ValueError("Username must contain only letters, numbers, or underscores")
         return normalized
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str):
+        if not re.search(r"[A-Z]", value) or not re.search(r"[a-z]", value) or not re.search(r"\d", value) or not re.search(r"[^A-Za-z0-9]", value):
+            raise ValueError("Password must contain uppercase, lowercase, number, and symbol.")
+        return value
 
 
 class UserLogin(BaseModel):
