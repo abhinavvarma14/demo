@@ -2,7 +2,7 @@ import { useMemo, useState } from "react"
 import { AnimatePresence, motion } from "framer-motion"
 import { useNavigate } from "react-router-dom"
 import { Sparkles } from "lucide-react"
-import API from "../api/api"
+import { postWithFallback } from "../api/api"
 import toast from "react-hot-toast"
 import { getApiErrorMessage } from "../utils/apiError"
 
@@ -19,26 +19,33 @@ const [passwordError, setPasswordError] = useState("")
 const [formError, setFormError] = useState("")
 
 const requirements = useMemo(() => {
-  const hasLength = password.length >= 4
-  const hasLetters = /[A-Za-z]/.test(password)
+  const hasUppercase = /[A-Z]/.test(password)
+  const hasLowercase = /[a-z]/.test(password)
   const hasNumber = /\d/.test(password)
   const hasSymbol = /[^A-Za-z0-9]/.test(password)
+  const hasLength = password.length >= 8
+  const score = [hasUppercase, hasLowercase, hasNumber, hasSymbol, hasLength].filter(Boolean).length
 
   let label = "Weak"
   let color = "bg-red-500"
-  let progress = "34%"
+  let progress = "20%"
 
-  if (hasLength && hasLetters && hasNumber && hasSymbol) {
+  if (score >= 5) {
     label = "Strong"
     color = "bg-green-500"
     progress = "100%"
-  } else if (hasLetters && hasNumber) {
+  } else if (score >= 3) {
     label = "Medium"
     color = "bg-yellow-400"
-    progress = "68%"
+    progress = "60%"
   }
 
   return {
+    hasUppercase,
+    hasLowercase,
+    hasNumber,
+    hasSymbol,
+    hasLength,
     label,
     color,
     progress,
@@ -92,7 +99,7 @@ try {
     return
   }
 
-  await API.post("/signup", {
+  await postWithFallback(["/signup", "/auth/signup"], {
     username: normalizedUsername,
     password
   })
@@ -107,16 +114,12 @@ try {
 
   const detail = error.response?.data?.detail
 
-  if (error.response?.status === 400 && detail === "Username already exists") {
+  if (error.response?.status === 409) {
     setUsernameError("Username already exists. Please choose another.")
-    toast.error("Username already exists")
   } else if (error.response?.status === 422) {
-    setPasswordError(detail || "Password must be at least 4 characters")
-    toast.error(detail || "Password must be at least 4 characters")
+    setPasswordError(detail || "Password must contain uppercase, lowercase, number, and symbol.")
   } else {
-    const message = getApiErrorMessage(error, "Signup failed")
-    setFormError(message)
-    toast.error(message)
+    setFormError(getApiErrorMessage(error, "Signup failed"))
   }
 
 } finally {
@@ -221,8 +224,27 @@ return (
       </div>
 
       <p className="mt-2 text-[11px] text-white/50">
-        Use at least 4 characters. Adding numbers and symbols makes it stronger.
+        Use at least 8 characters with uppercase, lowercase, number, and symbol.
       </p>
+
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {[
+          { label: "8+ chars", ok: requirements.hasLength },
+          { label: "Uppercase", ok: requirements.hasUppercase },
+          { label: "Lowercase", ok: requirements.hasLowercase },
+          { label: "Number", ok: requirements.hasNumber },
+          { label: "Symbol", ok: requirements.hasSymbol },
+        ].map((item) => (
+          <span
+            key={item.label}
+            className={`rounded-full px-2 py-1 text-[11px] ${
+              item.ok ? "bg-green-500/20 text-green-300" : "bg-white/10 text-white/45"
+            }`}
+          >
+            {item.label}
+          </span>
+        ))}
+      </div>
     </div>
 
     <input
