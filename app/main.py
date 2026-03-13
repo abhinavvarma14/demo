@@ -19,7 +19,7 @@ from fastapi.responses import JSONResponse
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import func, inspect, text
+from sqlalchemy import func, inspect, or_, text
 from sqlalchemy.orm import Session, joinedload
 
 load_dotenv()
@@ -451,15 +451,17 @@ def get_pdf_pricing_rule(db: Session, mode: str, print_type: str):
 
 
 def get_book_option(db: Session, book_id: int, mode: str, print_type: str):
-    option = (
-        db.query(models.BookOption)
-        .filter(
-            models.BookOption.book_id == book_id,
-            models.BookOption.mode == mode.strip(),
-            models.BookOption.print_type == normalize_print_type(print_type),
-        )
-        .first()
+    normalized_mode = (mode or "").strip()
+    query = db.query(models.BookOption).filter(
+        models.BookOption.book_id == book_id,
+        models.BookOption.print_type == normalize_print_type(print_type),
     )
+    if normalized_mode:
+        query = query.filter(models.BookOption.mode == normalized_mode)
+    else:
+        query = query.filter(or_(models.BookOption.mode.is_(None), models.BookOption.mode == ""))
+
+    option = query.first()
     if not option:
         raise HTTPException(status_code=404, detail="Book pricing option not found")
     return option
@@ -970,10 +972,11 @@ def add_to_cart(
     item_type = payload.item_type.lower()
 
     if item_type == "book":
-        if not payload.book_id or not payload.mode or not payload.print_type:
-            raise HTTPException(status_code=400, detail="Book items require book, mode, and print type")
+        if not payload.book_id or not payload.print_type:
+            raise HTTPException(status_code=400, detail="Book items require book and print type")
 
-        validate_mode_or_raise(payload.mode)
+        if payload.mode:
+            validate_mode_or_raise(payload.mode)
         validate_print_type_or_raise(payload.print_type)
         book = db.query(models.Book).filter(models.Book.id == payload.book_id).first()
         if not book:

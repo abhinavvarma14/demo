@@ -11,20 +11,28 @@ import CartButton from "./CartButton"
 import QuantityControl from "./QuantityControl"
 
 function BookCard({ book }) {
+  const normalizeModeValue = (value) => (typeof value === "string" ? value.trim() : "")
   const navigate = useNavigate()
   const [submitting, setSubmitting] = useState(false)
   const [quantity, setQuantity] = useState(1)
   const [hasAdded, setHasAdded] = useState(false)
   const [pulseKey, setPulseKey] = useState(0)
   const options = Array.isArray(book?.options) ? book.options : []
-  const modes = useMemo(() => [...new Set(options.map((option) => option.mode))], [options])
-  const [selectedMode, setSelectedMode] = useState(options[0]?.mode || "")
+  const modeOptions = useMemo(
+    () => [...new Set(options.map((option) => normalizeModeValue(option.mode)).filter(Boolean))],
+    [options]
+  )
+  const hasModeSelector = modeOptions.length > 0
+  const [selectedMode, setSelectedMode] = useState(normalizeModeValue(options[0]?.mode))
   const [selectedPrintType, setSelectedPrintType] = useState("single")
 
-  const availableOptions = useMemo(
-    () => options.filter((option) => option.mode === selectedMode),
-    [options, selectedMode]
-  )
+  const availableOptions = useMemo(() => {
+    if (!hasModeSelector) {
+      return options
+    }
+
+    return options.filter((option) => normalizeModeValue(option.mode) === selectedMode)
+  }, [hasModeSelector, options, selectedMode])
 
   const selectedOption =
     availableOptions.find((option) => option.print_type === selectedPrintType) ||
@@ -32,10 +40,10 @@ function BookCard({ book }) {
     options[0]
 
   useEffect(() => {
-    if (!selectedMode && modes.length > 0) {
-      setSelectedMode(modes[0])
+    if (!selectedMode && modeOptions.length > 0) {
+      setSelectedMode(modeOptions[0])
     }
-  }, [modes, selectedMode])
+  }, [modeOptions, selectedMode])
 
   useEffect(() => {
     if (availableOptions.length === 0) {
@@ -69,7 +77,7 @@ function BookCard({ book }) {
       await API.post("/cart/items", {
         item_type: "book",
         book_id: book.id,
-        mode: selectedOption.mode,
+        mode: selectedOption.mode || undefined,
         print_type: selectedOption.print_type,
         quantity,
       })
@@ -88,7 +96,7 @@ function BookCard({ book }) {
     <motion.article
       whileHover={{ y: -4 }}
       transition={{ type: "spring", stiffness: 260, damping: 22 }}
-      className="group relative overflow-hidden rounded-2xl border border-white/8 bg-[#111111] p-3 shadow-[0_18px_34px_rgba(0,0,0,0.24)]"
+      className="group relative overflow-hidden rounded-2xl bg-[#111111] p-3 shadow-[0_18px_34px_rgba(0,0,0,0.24)]"
     >
       <div className="absolute inset-0 bg-[linear-gradient(180deg,_rgba(255,255,255,0.04),_transparent_24%),radial-gradient(circle_at_bottom_right,_rgba(255,255,255,0.05),_transparent_28%)] opacity-70" />
 
@@ -124,7 +132,7 @@ function BookCard({ book }) {
           </div>
         </div>
 
-        <div className="mt-4 grid grid-cols-2 gap-2">
+        <div className={`mt-4 grid ${hasModeSelector ? "grid-cols-2" : "grid-cols-1"} gap-2`}>
           <div>
             <p className="mb-2 text-[11px] uppercase tracking-[0.28em] text-white/40">
               Side
@@ -136,16 +144,18 @@ function BookCard({ book }) {
             />
           </div>
 
-          <div>
-            <p className="mb-2 text-[11px] uppercase tracking-[0.28em] text-white/40">
-              Type
-            </p>
-            <PrintTypeToggle
-              value={selectedMode}
-              onChange={setSelectedMode}
-              disabled={!selectedOption || modes.length === 0}
-            />
-          </div>
+          {hasModeSelector && (
+            <div>
+              <p className="mb-2 text-[11px] uppercase tracking-[0.28em] text-white/40">
+                Mode
+              </p>
+              <PrintTypeToggle
+                value={selectedMode}
+                onChange={setSelectedMode}
+                disabled={!selectedOption || modeOptions.length === 0}
+              />
+            </div>
+          )}
         </div>
 
         {hasAdded && (
