@@ -2,7 +2,7 @@ import { useMemo, useState } from "react"
 import { AnimatePresence, motion } from "framer-motion"
 import { useNavigate } from "react-router-dom"
 import { Sparkles } from "lucide-react"
-import API from "../api/api"
+import { postWithFallback } from "../api/api"
 import toast from "react-hot-toast"
 import { getApiErrorMessage } from "../utils/apiError"
 
@@ -15,6 +15,7 @@ const [password, setPassword] = useState("")
 const [confirmPassword, setConfirmPassword] = useState("")
 const [submitting, setSubmitting] = useState(false)
 const [usernameError, setUsernameError] = useState("")
+const [passwordError, setPasswordError] = useState("")
 const [formError, setFormError] = useState("")
 
 const requirements = useMemo(() => {
@@ -23,15 +24,16 @@ const requirements = useMemo(() => {
   const hasNumber = /\d/.test(password)
   const hasSymbol = /[^A-Za-z0-9]/.test(password)
   const hasLength = password.length >= 8
+  const hasLetters = /[A-Za-z]/.test(password)
   const score = [hasUppercase, hasLowercase, hasNumber, hasSymbol, hasLength].filter(Boolean).length
 
   let label = "Weak"
   let color = "bg-red-500"
 
-  if (score >= 5) {
+  if (hasLength && hasUppercase && hasLowercase && hasNumber && hasSymbol) {
     label = "Strong"
     color = "bg-green-500"
-  } else if (score >= 3) {
+  } else if (hasLetters && hasNumber) {
     label = "Medium"
     color = "bg-yellow-400"
   }
@@ -76,6 +78,7 @@ const handleSignup = async (e) => {
 
 e.preventDefault()
 setUsernameError("")
+setPasswordError("")
 setFormError("")
 
 if (password !== confirmPassword) {
@@ -94,7 +97,7 @@ try {
     return
   }
 
-  await API.post("/auth/signup", {
+  await postWithFallback(["/signup", "/auth/signup"], {
     username: normalizedUsername,
     password
   })
@@ -107,8 +110,12 @@ try {
 
   console.log(error)
 
+  const detail = error.response?.data?.detail
+
   if (error.response?.status === 409) {
     setUsernameError("Username already exists. Please choose another.")
+  } else if (error.response?.status === 422) {
+    setPasswordError(detail || "Password must contain uppercase, lowercase, number, and symbol.")
   } else {
     setFormError(getApiErrorMessage(error, "Signup failed"))
   }
@@ -139,6 +146,7 @@ return (
       onChange={(e) => {
         setUsername(e.target.value)
         setUsernameError("")
+        setFormError("")
       }}
       className="w-full bg-white/5 border border-white/10 rounded-xl p-3"
     />
@@ -164,10 +172,25 @@ return (
       value={password}
       onChange={(e) => {
         setPassword(e.target.value)
+        setPasswordError("")
         setFormError("")
       }}
       className="w-full bg-white/5 border border-white/10 rounded-xl p-3"
     />
+
+    <AnimatePresence mode="wait">
+      {passwordError && (
+        <motion.p
+          key={passwordError}
+          initial={{ opacity: 0, y: -6 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -6 }}
+          className="text-red-500 text-sm mt-2"
+        >
+          {passwordError}
+        </motion.p>
+      )}
+    </AnimatePresence>
 
     <div className="mt-3 rounded-2xl border border-white/10 bg-white/5 p-2.5">
       <div className="flex items-center justify-between gap-3">
