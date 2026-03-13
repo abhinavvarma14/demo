@@ -1,7 +1,7 @@
 import { useState } from "react"
 import { AnimatePresence, motion } from "framer-motion"
 import { useNavigate } from "react-router-dom"
-import { postWithFallback } from "../api/api"
+import API from "../api/api"
 import toast from "react-hot-toast"
 import { getUserRole } from "../utils/auth"
 import { getApiErrorMessage } from "../utils/apiError"
@@ -38,7 +38,7 @@ try {
   params.append("username", normalizedUsername)
   params.append("password", password)
 
-  const res = await postWithFallback(["/auth/login", "/login"], params, {
+  const res = await API.post("/login", params, {
     headers: {
       "Content-Type": "application/x-www-form-urlencoded"
     }
@@ -59,14 +59,13 @@ try {
   console.log(error)
   const detail = error.response?.data?.detail
 
-  if (error.response?.status === 404) {
-    setFormError("No user found. Please sign up.")
-  } else if (error.response?.status === 401) {
-    setFormError("Incorrect password.")
-  } else if (error.response?.status === 429) {
-    setFormError(detail || "Too many login attempts. Try again later.")
+  if (error.response?.status === 400) {
+    const message = detail || "Invalid username or password"
+    setFormError(message)
+    toast.error("Invalid username or password")
   } else {
     setFormError(detail || getApiErrorMessage(error, "Login failed"))
+    toast.error(detail || "Login failed")
   }
 
 } finally {

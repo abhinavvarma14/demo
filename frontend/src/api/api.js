@@ -6,24 +6,6 @@ const API = axios.create({
   baseURL: API_BASE_URL
 })
 
-export const postWithFallback = async (paths, data, config = {}) => {
-  let lastError
-
-  for (const path of paths) {
-    try {
-      return await API.post(path, data, config)
-    } catch (error) {
-      lastError = error
-
-      if (error.response?.status !== 404 || path === paths[paths.length - 1]) {
-        throw error
-      }
-    }
-  }
-
-  throw lastError
-}
-
 API.interceptors.request.use((config) => {
   const token = localStorage.getItem("token")
   const url = typeof config.url === "string" ? config.url : ""
