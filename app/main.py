@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from jose import JWTError, jwt
 from passlib.context import CryptContext
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func, inspect, text
 from sqlalchemy.orm import Session, joinedload
 
@@ -49,17 +50,32 @@ WEBHOOK_SECRET = get_required_env("WEBHOOK_SECRET")
 DEFAULT_CORS_ORIGINS = [
     "https://demo-ashy-sigma.vercel.app",
     "http://localhost:5173",
+    "http://localhost:3000",
     "http://127.0.0.1:5173",
 ]
 
-CORS_ORIGINS = [
-    origin.strip()
-    for origin in os.getenv(
-        "CORS_ORIGINS",
-        os.getenv("FRONTEND_URL", ",".join(DEFAULT_CORS_ORIGINS)),
-    ).split(",")
-    if origin.strip()
-]
+def build_cors_origins() -> list[str]:
+    configured_origins: list[str] = []
+    for env_name in ("FRONTEND_URL", "CORS_ORIGINS"):
+        raw_value = os.getenv(env_name, "")
+        if not raw_value:
+            continue
+        configured_origins.extend(
+            origin.strip().rstrip("/")
+            for origin in raw_value.split(",")
+            if origin.strip()
+        )
+
+    merged_origins: list[str] = []
+    for origin in [*DEFAULT_CORS_ORIGINS, *configured_origins]:
+        normalized_origin = origin.strip().rstrip("/")
+        if normalized_origin and normalized_origin not in merged_origins:
+            merged_origins.append(normalized_origin)
+
+    return merged_origins
+
+
+CORS_ORIGINS = build_cors_origins()
 
 UPLOAD_DIR = Path("app/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -94,6 +110,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+logger.info("configured cors origins=%s", CORS_ORIGINS)
 
 
 @app.exception_handler(RequestValidationError)
@@ -136,8 +154,14 @@ def migrate_legacy_passwords(db: Session):
     legacy_users = db.query(models.User).all()
     updated = 0
     for user in legacy_users:
-        if user.password_hash and not is_password_hashed(user.password_hash):
-            user.password_hash = hash_password(user.password_hash)
+        source_password = user.password_hash or user.password
+        if source_password and not is_password_hashed(source_password):
+            hashed_password = hash_password(source_password)
+            user.password_hash = hashed_password
+            user.password = hashed_password
+            updated += 1
+        elif user.password_hash and is_password_hashed(user.password_hash) and user.password != user.password_hash:
+            user.password = user.password_hash
             updated += 1
     if updated:
         db.commit()
@@ -344,6 +368,12 @@ def sync_schema():
                 text(
                     "UPDATE users SET password_hash = password "
                     "WHERE (password_hash IS NULL OR password_hash = '') AND password IS NOT NULL"
+                )
+            )
+            connection.execute(
+                text(
+                    "UPDATE users SET password = password_hash "
+                    "WHERE password_hash IS NOT NULL AND (password IS NULL OR password = '')"
                 )
             )
 
@@ -555,8 +585,18 @@ def signup(user: schemas.UserCreate, db: Session = Depends(get_db)):
     if existing_user:
         raise HTTPException(status_code=409, detail="Username already exists")
 
-    db.add(models.User(username=username, password_hash=hash_password(user.password)))
-    db.commit()
+    hashed_password = hash_password(user.password)
+    db.add(models.User(username=username, password_hash=hashed_password, password=hashed_password))
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        logger.exception("signup failed integrity error username=%s", username)
+        raise HTTPException(status_code=409, detail="Username already exists")
+    except Exception:
+        db.rollback()
+        logger.exception("signup failed username=%s", username)
+        raise HTTPException(status_code=500, detail="Unable to create account")
     logger.info("signup success username=%s", username)
     return {"message": "User created"}
 
@@ -584,16 +624,23 @@ def login(
         record_failed_login(login_key)
         logger.warning("login failed unknown username=%s client=%s", username, request.client.host if request.client else "unknown")
         raise HTTPException(status_code=404, detail="No user found. Please sign up.")
-    if not verify_password(form_data.password, db_user.password_hash):
+    stored_password = db_user.password_hash or db_user.password
+    if not verify_password(form_data.password, stored_password):
         record_failed_login(login_key)
         logger.warning("login failed bad password username=%s client=%s", username, request.client.host if request.client else "unknown")
         raise HTTPException(status_code=401, detail="Incorrect password.")
 
-    if not is_password_hashed(db_user.password_hash):
-        db_user.password_hash = hash_password(form_data.password)
+    if not is_password_hashed(stored_password):
+        hashed_password = hash_password(form_data.password)
+        db_user.password_hash = hashed_password
+        db_user.password = hashed_password
         db.commit()
         db.refresh(db_user)
         logger.info("login upgraded legacy password hash username=%s", username)
+    elif db_user.password != db_user.password_hash:
+        db_user.password = db_user.password_hash
+        db.commit()
+        db.refresh(db_user)
 
     clear_failed_logins(login_key)
 

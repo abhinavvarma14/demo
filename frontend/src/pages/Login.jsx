@@ -38,7 +38,7 @@ try {
   params.append("username", normalizedUsername)
   params.append("password", password)
 
-  const res = await postWithFallback(["/auth/login", "/login"], params, {
+  const res = await postWithFallback(["/login", "/auth/login"], params, {
     headers: {
       "Content-Type": "application/x-www-form-urlencoded"
     }

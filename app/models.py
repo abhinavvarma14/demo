@@ -11,6 +11,9 @@ class User(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True, nullable=False)
+    # Legacy compatibility: some deployed databases still have this column.
+    # We keep it in sync with password_hash using hashed values only.
+    password = Column(String, nullable=True)
     password_hash = Column(String, nullable=False)
     role = Column(String, default="user")
 

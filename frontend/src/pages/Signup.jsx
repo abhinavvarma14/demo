@@ -79,6 +79,11 @@ const generatePassword = () => {
 const handleSignup = async (e) => {
 
 e.preventDefault()
+
+if (submitting) {
+  return
+}
+
 setUsernameError("")
 setPasswordError("")
 setFormError("")
