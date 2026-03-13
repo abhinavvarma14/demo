@@ -1,10 +1,16 @@
 import { useEffect, useState } from "react"
+import { useNavigate } from "react-router-dom"
 import API from "../api/api"
+import toast from "react-hot-toast"
+import { getUsername } from "../utils/auth"
+import { getApiErrorMessage } from "../utils/apiError"
 
 function Profile(){
+const navigate = useNavigate()
 
 const [orders,setOrders] = useState([])
-const [username,setUsername] = useState("")
+const [username,setUsername] = useState(getUsername() || "")
+const [loading, setLoading] = useState(true)
 
 const fetchProfile = async () => {
 
@@ -18,6 +24,7 @@ try{
 catch(err){
 
   console.log(err)
+  toast.error(getApiErrorMessage(err))
 
 }
 
@@ -35,7 +42,10 @@ try{
 catch(err){
 
   console.log(err)
+  toast.error(getApiErrorMessage(err))
 
+} finally {
+  setLoading(false)
 }
 
 }
@@ -47,6 +57,12 @@ fetchOrders()
 
 },[])
 
+const handleLogout = () => {
+  localStorage.removeItem("token")
+  toast.success("Logged out successfully")
+  navigate("/login")
+}
+
 return(
 
 <div className="pt-24 px-4 pb-24">
@@ -56,6 +72,10 @@ return(
     My Profile
 
   </h1>
+
+  <p className="text-gray-300 mb-4">
+    Hello, {username || "there"}
+  </p>
 
   <div className="bg-white/5 border border-white/10 rounded-xl p-4 mb-6">
 
@@ -67,15 +87,34 @@ return(
       {username}
     </p>
 
+    <p className="text-gray-500 text-sm mt-2">
+      Total Orders: {orders.length}
+    </p>
+
   </div>
+
+  <button
+    onClick={handleLogout}
+    className="w-full bg-white/5 border border-white/10 rounded-xl p-3 mb-6 text-left"
+  >
+    Logout
+  </button>
 
   <h2 className="text-xl font-semibold mb-4">
 
-    My Orders
+    Recent Orders
 
   </h2>
 
-  {orders.length === 0 && (
+  {loading && (
+    <>
+      {[1, 2].map((item) => (
+        <div key={item} className="bg-white/5 border border-white/10 rounded-xl p-4 mb-3 h-24 animate-pulse" />
+      ))}
+    </>
+  )}
+
+  {!loading && orders.length === 0 && (
 
     <p className="text-gray-400">
 
@@ -85,7 +124,7 @@ return(
 
   )}
 
-  {orders.map((order)=>(
+  {!loading && orders.slice(0, 3).map((order)=>(
     
     <div
     key={order.id}

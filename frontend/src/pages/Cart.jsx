@@ -2,25 +2,30 @@ import { useEffect, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import API from "../api/api"
 import toast from "react-hot-toast"
+import { getApiErrorMessage } from "../utils/apiError"
 
 function Cart() {
   const navigate = useNavigate()
   const [cart, setCart] = useState([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [updatingId, setUpdatingId] = useState(null)
 
   const fetchCart = async () => {
     try {
       const res = await API.get("/cart")
       setCart(res.data.items)
       setTotal(res.data.total_amount)
-    } catch (error) {
-      console.log(error)
-      if (error.response?.status === 401) {
-        navigate("/login")
-      }
-    } finally {
-      setLoading(false)
+      } catch (error) {
+        console.log(error)
+        if (error.response?.status === 401) {
+          toast.error("Please login to continue")
+          navigate("/login")
+        } else {
+          toast.error(getApiErrorMessage(error))
+        }
+      } finally {
+        setLoading(false)
     }
   }
 
@@ -35,7 +40,24 @@ function Cart() {
       fetchCart()
     } catch (error) {
       console.log(error)
-      toast.error("Failed to remove item")
+      toast.error(getApiErrorMessage(error, "Failed to remove item"))
+    }
+  }
+
+  const updateQuantity = async (item, nextQuantity) => {
+    if (nextQuantity <= 0) {
+      return removeItem(item.id)
+    }
+
+    try {
+      setUpdatingId(item.id)
+      await API.patch(`/cart/items/${item.id}`, { quantity: nextQuantity })
+      fetchCart()
+    } catch (error) {
+      console.log(error)
+      toast.error(getApiErrorMessage(error, "Failed to update item"))
+    } finally {
+      setUpdatingId(null)
     }
   }
 
@@ -46,9 +68,11 @@ function Cart() {
       </h1>
 
       {loading && (
-        <p className="text-gray-400">
-          Loading cart...
-        </p>
+        <>
+          {[1, 2].map((item) => (
+            <div key={item} className="bg-white/5 border border-white/10 rounded-xl p-4 mb-4 h-28 animate-pulse" />
+          ))}
+        </>
       )}
 
       {!loading && cart.length === 0 && (
@@ -78,6 +102,24 @@ function Cart() {
             Quantity: {item.quantity}
           </p>
 
+          <div className="flex gap-2 mt-3">
+            <button
+              onClick={() => updateQuantity(item, item.quantity - 1)}
+              disabled={updatingId === item.id}
+              className="bg-white/5 border border-white/10 rounded-lg px-3 py-1"
+            >
+              -
+            </button>
+
+            <button
+              onClick={() => updateQuantity(item, item.quantity + 1)}
+              disabled={updatingId === item.id}
+              className="bg-white/5 border border-white/10 rounded-lg px-3 py-1"
+            >
+              +
+            </button>
+          </div>
+
           {item.upload && (
             <p className="text-gray-400 text-sm">
               Pages: {item.upload.total_pages}
@@ -97,7 +139,7 @@ function Cart() {
         </div>
       ))}
 
-      <div className="bg-white/5 border border-white/10 rounded-2xl p-4 mt-6">
+      <div className="sticky bottom-20 bg-white/5 border border-white/10 rounded-2xl p-4 mt-6">
         <p className="text-gray-400 text-sm">
           Total
         </p>

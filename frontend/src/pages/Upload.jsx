@@ -4,10 +4,13 @@ import { useDropzone } from "react-dropzone"
 import * as pdfjsLib from "pdfjs-dist"
 import API from "../api/api"
 import toast from "react-hot-toast"
+import { isLoggedIn } from "../utils/auth"
+import { getApiErrorMessage } from "../utils/apiError"
 
 function Upload() {
   const navigate = useNavigate()
   const [file, setFile] = useState(null)
+  const [previewUrl, setPreviewUrl] = useState("")
   const [pages, setPages] = useState(0)
   const [copies, setCopies] = useState(1)
   const [mode, setMode] = useState("black_white")
@@ -27,12 +30,26 @@ function Upload() {
         const typedarray = new Uint8Array(this.result)
         const pdf = await pdfjsLib.getDocument(typedarray).promise
         setPages(pdf.numPages)
+
+        const firstPage = await pdf.getPage(1)
+        const viewport = firstPage.getViewport({ scale: 1 })
+        const canvas = document.createElement("canvas")
+        const context = canvas.getContext("2d")
+        canvas.width = viewport.width
+        canvas.height = viewport.height
+
+        await firstPage.render({
+          canvasContext: context,
+          viewport,
+        }).promise
+
+        setPreviewUrl(canvas.toDataURL("image/png"))
       }
       reader.readAsArrayBuffer(selectedFile)
       toast.success("PDF selected")
     } catch (error) {
       console.log(error)
-      toast.error("Failed to read PDF")
+      toast.error(getApiErrorMessage(error, "Failed to read PDF"))
     }
   }
 
@@ -71,8 +88,8 @@ function Upload() {
   }, [copies, file, mode, pages, printType])
 
   const addToCart = async () => {
-    if (!localStorage.getItem("token")) {
-      toast.error("Please login first")
+    if (!isLoggedIn()) {
+      toast.error("Please login to continue")
       navigate("/login")
       return
     }
@@ -108,7 +125,7 @@ function Upload() {
       navigate("/cart")
     } catch (error) {
       console.log(error)
-      toast.error(error.response?.data?.detail || "Upload failed")
+      toast.error(getApiErrorMessage(error, "Upload failed"))
     } finally {
       setSubmitting(false)
     }
@@ -139,6 +156,19 @@ function Upload() {
         <p className="mt-3 text-gray-400 text-sm">
           Selected: {file.name}
         </p>
+      )}
+
+      {previewUrl && (
+        <div className="mt-4 bg-white/5 border border-white/10 rounded-2xl p-3">
+          <p className="text-gray-400 text-sm mb-3">
+            Preview
+          </p>
+          <img
+            src={previewUrl}
+            alt="PDF preview"
+            className="w-full rounded-xl border border-white/10"
+          />
+        </div>
       )}
 
       {pages > 0 && (

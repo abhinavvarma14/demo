@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom"
 import API from "../api/api"
 import toast from "react-hot-toast"
 import { isLoggedIn } from "../utils/auth"
+import { getApiErrorMessage } from "../utils/apiError"
 
 function BookCard({ book }) {
   const navigate = useNavigate()
@@ -33,7 +34,7 @@ function BookCard({ book }) {
     }
 
     if (!isLoggedIn()) {
-      toast.error("Please login to add items to cart")
+      toast.error("Please login to continue")
       navigate("/login")
       return
     }
@@ -50,7 +51,7 @@ function BookCard({ book }) {
       toast.success(`${book.name} added to cart`)
     } catch (error) {
       console.log(error)
-      toast.error(error.response?.data?.detail || "Failed to add book")
+      toast.error(getApiErrorMessage(error, "Failed to add book"))
     } finally {
       setSubmitting(false)
     }

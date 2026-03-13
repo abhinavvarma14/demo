@@ -1,13 +1,35 @@
-import { Home, ShoppingCart, User } from "lucide-react"
+import { ClipboardList, Home, ShoppingCart, User } from "lucide-react"
 import { useNavigate, useLocation } from "react-router-dom"
 import { isLoggedIn } from "../utils/auth"
+import toast from "react-hot-toast"
+import { useEffect, useState } from "react"
+import API from "../api/api"
 
 function MobileNav(){
 
 const navigate = useNavigate()
 const location = useLocation()
+const [cartCount, setCartCount] = useState(0)
 
-if(location.pathname === "/admin"){
+useEffect(() => {
+  const fetchCartCount = async () => {
+    if (!isLoggedIn()) {
+      setCartCount(0)
+      return
+    }
+
+    try {
+      const res = await API.get("/cart")
+      setCartCount((res.data.items || []).length)
+    } catch {
+      setCartCount(0)
+    }
+  }
+
+  fetchCartCount()
+}, [location.pathname])
+
+if(location.pathname.startsWith("/admin")){
   return null
 }
 
@@ -19,6 +41,7 @@ if(isLoggedIn()){
   navigate("/profile")
 }
 else{
+  toast.error("Please login to continue")
   navigate("/login")
 }
 
@@ -33,7 +56,7 @@ return(
     w-[92%] max-w-[420px]
     bg-white/5 backdrop-blur-xl border border-white/10
     rounded-2xl px-8 py-3
-    flex items-center justify-between
+    grid grid-cols-4 items-center
     shadow-lg
     "
   >
@@ -57,13 +80,30 @@ return(
 
     <button
       onClick={()=>navigate("/cart")}
-      className={`flex flex-col items-center text-xs transition
+      className={`relative flex flex-col items-center text-xs transition
       ${active("/cart") ? "text-yellow-400" : "text-gray-400"}`}
     >
 
       <ShoppingCart size={22}/>
+      {cartCount > 0 && (
+        <span className="absolute -top-1 right-2 min-w-4 h-4 px-1 rounded-full bg-yellow-400 text-black text-[10px] flex items-center justify-center">
+          {cartCount}
+        </span>
+      )}
 
       Cart
+
+    </button>
+
+    <button
+      onClick={()=>navigate("/orders")}
+      className={`flex flex-col items-center text-xs transition
+      ${active("/orders") ? "text-yellow-400" : "text-gray-400"}`}
+    >
+
+      <ClipboardList size={22}/>
+
+      Orders
 
     </button>
 

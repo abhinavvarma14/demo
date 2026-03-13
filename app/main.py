@@ -1,15 +1,20 @@
 import os
 import shutil
 import uuid
-from datetime import datetime, timedelta
+import logging
+import base64
+from datetime import datetime, timedelta, timezone
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import razorpay
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlalchemy import func, inspect, text
@@ -19,6 +24,9 @@ load_dotenv()
 
 from . import models, schemas
 from .database import SessionLocal, engine
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("batprint")
 
 def get_required_env(name: str) -> str:
     value = os.getenv(name)
@@ -58,7 +66,16 @@ razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
 
 models.Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="Batman Printing Backend")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    models.Base.metadata.create_all(bind=engine)
+    sync_schema()
+    seed_defaults()
+    yield
+
+
+app = FastAPI(title="Batman Printing Backend", lifespan=lifespan)
 app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 
 app.add_middleware(
@@ -69,6 +86,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    first_error = exc.errors()[0] if exc.errors() else None
+    message = first_error.get("msg", "Invalid request") if first_error else "Invalid request"
+    return JSONResponse(status_code=422, content={"detail": message})
+
 def get_db():
     db = SessionLocal()
     try:
@@ -78,7 +102,7 @@ def get_db():
 
 def create_access_token(data: dict):
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
@@ -105,13 +129,14 @@ def get_current_user(
 
 def require_admin(current_user: models.User):
     if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
+        raise HTTPException(status_code=403, detail="Admin access required")
 
 
 def get_current_admin_user(
     current_user: models.User = Depends(get_current_user),
 ):
-    require_admin(current_user)
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
     return current_user
 
 
@@ -143,6 +168,64 @@ def normalize_print_type(value: str | None):
     return mapping.get(normalized, normalized)
 
 
+def validate_mode_or_raise(value: str | None):
+    normalized = normalize_mode(value)
+    if normalized not in {"black_white", "color"}:
+        raise HTTPException(status_code=400, detail="Mode is required")
+    return normalized
+
+
+def validate_print_type_or_raise(value: str | None):
+    normalized = normalize_print_type(value)
+    if normalized not in {"single", "double"}:
+        raise HTTPException(status_code=400, detail="Print type must be single or double")
+    return normalized
+
+
+VALID_ORDER_STATUSES = {"pending", "paid", "printing", "ready", "delivered"}
+
+
+def get_pending_print_queue_query(db: Session):
+    return (
+        db.query(models.OrderItem)
+        .join(models.Order, models.Order.id == models.OrderItem.order_id)
+        .filter(
+            models.OrderItem.printed.is_(False),
+            models.Order.status.in_(["paid", "printing", "ready"]),
+        )
+    )
+
+
+def apply_print_queue_filters(query, item_name: str, mode: str | None, print_type: str):
+    normalized_mode = normalize_mode(mode) if mode else None
+    normalized_print_type = normalize_print_type(print_type)
+    query = query.filter(models.OrderItem.item_name == item_name)
+    if normalized_mode is None:
+        query = query.filter(models.OrderItem.mode.is_(None))
+    else:
+        query = query.filter(models.OrderItem.mode == normalized_mode)
+    return query.filter(models.OrderItem.print_type == normalized_print_type)
+
+
+def encode_print_group_id(item_name: str, mode: str | None, print_type: str) -> str:
+    raw = f"{item_name}|{mode or ''}|{normalize_print_type(print_type) or ''}"
+    return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("utf-8").rstrip("=")
+
+
+def decode_print_group_id(group_id: str) -> tuple[str, str | None, str]:
+    try:
+        padded = group_id + "=" * (-len(group_id) % 4)
+        decoded = base64.urlsafe_b64decode(padded.encode("utf-8")).decode("utf-8")
+        item_name, mode, print_type = decoded.split("|", 2)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid print group")
+
+    if not item_name:
+        raise HTTPException(status_code=400, detail="Invalid print group")
+
+    return item_name, (mode or None), print_type
+
+
 def sync_schema():
     inspector = inspect(engine)
     expected_columns = {
@@ -151,6 +234,9 @@ def sync_schema():
             "original_filename": "ALTER TABLE uploads ADD COLUMN original_filename VARCHAR",
             "mode": "ALTER TABLE uploads ADD COLUMN mode VARCHAR",
             "created_at": "ALTER TABLE uploads ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+        },
+        "users": {
+            "password_hash": "ALTER TABLE users ADD COLUMN password_hash VARCHAR",
         },
         "cart_items": {
             "book_id": "ALTER TABLE cart_items ADD COLUMN book_id INTEGER",
@@ -184,6 +270,23 @@ def sync_schema():
             for column_name, ddl in ddl_map.items():
                 if column_name not in existing:
                     connection.execute(text(ddl))
+
+        user_columns = {column["name"] for column in inspector.get_columns("users")} if "users" in inspector.get_table_names() else set()
+        if "password_hash" in user_columns and "password" in user_columns:
+            connection.execute(
+                text(
+                    "UPDATE users SET password_hash = password "
+                    "WHERE (password_hash IS NULL OR password_hash = '') AND password IS NOT NULL"
+                )
+            )
+
+        for statement in [
+            "CREATE INDEX IF NOT EXISTS ix_order_items_order_id ON order_items (order_id)",
+            "CREATE INDEX IF NOT EXISTS ix_order_items_book_id ON order_items (book_id)",
+            "CREATE INDEX IF NOT EXISTS ix_order_items_printed ON order_items (printed)",
+            "CREATE INDEX IF NOT EXISTS ix_book_options_book_id ON book_options (book_id)",
+        ]:
+            connection.execute(text(statement))
 
 
 def seed_defaults():
@@ -221,13 +324,6 @@ def seed_defaults():
         db.commit()
     finally:
         db.close()
-
-
-@app.on_event("startup")
-def startup():
-    models.Base.metadata.create_all(bind=engine)
-    sync_schema()
-    seed_defaults()
 
 
 def get_pdf_pricing_rule(db: Session, mode: str, print_type: str):
@@ -391,16 +487,20 @@ def signup(user: schemas.UserCreate, db: Session = Depends(get_db)):
     if existing_user:
         raise HTTPException(status_code=400, detail="Username already exists")
 
-    db.add(models.User(username=user.username, password=pwd_context.hash(user.password)))
+    db.add(models.User(username=user.username, password_hash=pwd_context.hash(user.password)))
     db.commit()
+    logger.info("signup success username=%s", user.username)
     return {"message": "User created"}
 
 @app.post("/login")
 def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    logger.info("login attempt username=%s", form_data.username)
     db_user = db.query(models.User).filter(models.User.username == form_data.username).first()
     if not db_user:
+        logger.warning("login failed unknown username=%s", form_data.username)
         raise HTTPException(status_code=401, detail="Invalid username or password")
-    if not pwd_context.verify(form_data.password, db_user.password):
+    if not pwd_context.verify(form_data.password, db_user.password_hash):
+        logger.warning("login failed bad password username=%s", form_data.username)
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
     token = create_access_token(
@@ -410,6 +510,7 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
             "username": db_user.username,
         }
     )
+    logger.info("login success username=%s role=%s", db_user.username, db_user.role)
     return {"access_token": token, "token_type": "bearer"}
 
 
@@ -453,6 +554,7 @@ def create_book(
     db.add(book)
     db.commit()
     db.refresh(book)
+    logger.info("admin created book admin_id=%s book_id=%s", current_user.id, book.id)
     return serialize_admin_book(book)
 
 
@@ -464,6 +566,46 @@ def get_admin_books(
     require_admin(current_user)
     books = db.query(models.Book).options(joinedload(models.Book.options)).order_by(models.Book.name.asc()).all()
     return [serialize_admin_book(book) for book in books]
+
+
+@app.put("/admin/books/{book_id}")
+def update_book(
+    book_id: int,
+    payload: schemas.BookUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    book = db.query(models.Book).filter(models.Book.id == book_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    if payload.name is not None:
+        book.name = payload.name.strip()
+    if payload.year is not None:
+        book.year = payload.year.strip()
+    if payload.is_active is not None:
+        book.is_active = payload.is_active
+
+    db.commit()
+    db.refresh(book)
+    logger.info("admin updated book admin_id=%s book_id=%s", current_user.id, book.id)
+    return serialize_admin_book(book)
+
+
+@app.delete("/admin/books/{book_id}")
+def delete_book(
+    book_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    book = db.query(models.Book).filter(models.Book.id == book_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    db.delete(book)
+    db.commit()
+    logger.info("admin deleted book admin_id=%s book_id=%s", current_user.id, book_id)
+    return {"message": "Book deleted"}
 
 
 @app.post("/admin/book-options")
@@ -488,6 +630,7 @@ def create_book_option(
     db.add(option)
     db.commit()
     db.refresh(option)
+    logger.info("admin created book option admin_id=%s option_id=%s", current_user.id, option.id)
     return {
         "id": option.id,
         "book_id": option.book_id,
@@ -521,6 +664,7 @@ def update_book_option_admin(
 
     db.commit()
     db.refresh(option)
+    logger.info("admin updated book option admin_id=%s option_id=%s", current_user.id, option.id)
     return {
         "id": option.id,
         "book_id": option.book_id,
@@ -544,6 +688,7 @@ def delete_book_option_admin(
 
     db.delete(option)
     db.commit()
+    logger.info("admin deleted book option admin_id=%s option_id=%s", current_user.id, option_id)
     return {"message": "Book option deleted"}
 
 
@@ -552,6 +697,8 @@ def get_pdf_quote(total_pages: int, copies: int, mode: str, print_type: str, db:
     if total_pages <= 0 or copies <= 0:
         raise HTTPException(status_code=400, detail="Pages and copies must be positive")
 
+    validate_mode_or_raise(mode)
+    validate_print_type_or_raise(print_type)
     rule = get_pdf_pricing_rule(db, mode, print_type)
     total_price = total_pages * copies * rule.price_per_page
     return {
@@ -578,7 +725,17 @@ async def upload_pdf(
     copies = quantity or copies or 0
     if total_pages <= 0 or copies <= 0:
         raise HTTPException(status_code=400, detail="Pages and copies must be positive")
+    if file.content_type != "application/pdf" and not (file.filename or "").lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are allowed")
 
+    file.file.seek(0, 2)
+    file_size = file.file.tell()
+    file.file.seek(0)
+    if file_size > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="PDF must be smaller than 10 MB")
+
+    validate_mode_or_raise(mode)
+    validate_print_type_or_raise(print_type)
     rule = get_pdf_pricing_rule(db, mode, print_type)
     extension = Path(file.filename or "document.pdf").suffix or ".pdf"
     stored_filename = f"{uuid.uuid4().hex}{extension}"
@@ -623,13 +780,13 @@ def add_to_cart(
     current_user: models.User = Depends(get_current_user),
 ):
     item_type = payload.item_type.lower()
-    if payload.quantity <= 0:
-        raise HTTPException(status_code=400, detail="Quantity must be positive")
 
     if item_type == "book":
         if not payload.book_id or not payload.mode or not payload.print_type:
             raise HTTPException(status_code=400, detail="Book items require book, mode, and print type")
 
+        validate_mode_or_raise(payload.mode)
+        validate_print_type_or_raise(payload.print_type)
         book = db.query(models.Book).filter(models.Book.id == payload.book_id).first()
         if not book:
             raise HTTPException(status_code=404, detail="Book not found")
@@ -684,8 +841,10 @@ def add_to_cart(
         if payload.total_pages and upload.total_pages != payload.total_pages:
             upload.total_pages = payload.total_pages
         if payload.mode:
+            validate_mode_or_raise(payload.mode)
             upload.mode = normalize_mode(payload.mode)
         if payload.print_type:
+            validate_print_type_or_raise(payload.print_type)
             upload.print_type = normalize_print_type(payload.print_type)
         if payload.quantity:
             upload.copies = payload.quantity
@@ -753,6 +912,41 @@ def remove_cart_item(
     db.commit()
     return {"message": "Cart item removed"}
 
+
+@app.patch("/cart/items/{item_id}")
+def update_cart_item(
+    item_id: int,
+    payload: schemas.CartItemUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    item = (
+        db.query(models.CartItem)
+        .options(joinedload(models.CartItem.upload), joinedload(models.CartItem.book))
+        .filter(models.CartItem.id == item_id, models.CartItem.user_id == current_user.id)
+        .first()
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail="Cart item not found")
+
+    item.quantity = payload.quantity
+
+    if item.item_type == "book":
+        item.total_price = payload.quantity * item.unit_price
+        item.calculated_price = item.total_price
+    elif item.item_type == "pdf":
+        item.total_price = payload.quantity * item.unit_price
+        item.calculated_price = item.total_price
+        if item.upload:
+            item.upload.copies = payload.quantity
+            item.upload.calculated_price = item.total_price
+    else:
+        raise HTTPException(status_code=400, detail="Unsupported cart item type")
+
+    db.commit()
+    db.refresh(item)
+    return serialize_cart_item(item)
+
 @app.post("/orders")
 def create_order(
     order: schemas.OrderCreate,
@@ -805,6 +999,7 @@ def create_order(
 
     db.commit()
     db.refresh(new_order)
+    logger.info("order created order_id=%s user_id=%s total=%s", new_order.id, current_user.id, new_order.total_amount)
     return {"order_id": new_order.id, "total_amount": new_order.total_amount}
 
 
@@ -831,11 +1026,16 @@ def create_payment(
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
 
-    razorpay_order = razorpay_client.order.create(
-        {"amount": int(order.total_amount * 100), "currency": "INR", "payment_capture": 1}
-    )
+    try:
+        razorpay_order = razorpay_client.order.create(
+            {"amount": int(order.total_amount * 100), "currency": "INR", "payment_capture": 1}
+        )
+    except Exception:
+        logger.exception("payment order creation failed order_id=%s user_id=%s", order.id, current_user.id)
+        raise HTTPException(status_code=502, detail="Unable to create payment order")
     order.razorpay_order_id = razorpay_order["id"]
     db.commit()
+    logger.info("payment order created order_id=%s user_id=%s razorpay_order_id=%s", order.id, current_user.id, order.razorpay_order_id)
     return {
         **razorpay_order,
         "key_id": RAZORPAY_KEY_ID,
@@ -857,6 +1057,7 @@ def verify_payment(
             }
         )
     except Exception:
+        logger.warning("payment verification failed user_id=%s razorpay_order_id=%s", current_user.id, payload.razorpay_order_id)
         raise HTTPException(status_code=400, detail="Payment verification failed")
 
     order = (
@@ -874,6 +1075,7 @@ def verify_payment(
     order.razorpay_payment_id = payload.razorpay_payment_id
     db.query(models.CartItem).filter(models.CartItem.user_id == current_user.id).delete()
     db.commit()
+    logger.info("payment verified order_id=%s user_id=%s", order.id, current_user.id)
     return {"message": "Payment verified"}
 
 
@@ -913,6 +1115,38 @@ def admin_orders(
     return [serialize_order(order, include_user=True) for order in orders]
 
 
+@app.get("/admin/analytics")
+def admin_analytics(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    total_orders = db.query(func.count(models.Order.id)).scalar() or 0
+    pending_orders = db.query(func.count(models.Order.id)).filter(models.Order.status == "pending").scalar() or 0
+    printing_orders = db.query(func.count(models.Order.id)).filter(models.Order.status == "printing").scalar() or 0
+    completed_orders = db.query(func.count(models.Order.id)).filter(models.Order.status == "delivered").scalar() or 0
+    total_revenue = (
+        db.query(func.coalesce(func.sum(models.Order.total_amount), 0))
+        .filter(models.Order.status.in_(["paid", "printing", "ready", "delivered"]))
+        .scalar()
+        or 0
+    )
+    return {
+        "total_orders": int(total_orders),
+        "pending_orders": int(pending_orders),
+        "printing_orders": int(printing_orders),
+        "completed_orders": int(completed_orders),
+        "total_revenue": float(total_revenue),
+    }
+
+
+@app.get("/admin/dashboard")
+def admin_dashboard(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    return admin_analytics(db=db, current_user=current_user)
+
+
 @app.put("/admin/orders/{order_id}/status")
 def update_order_status(
     order_id: int,
@@ -920,12 +1154,16 @@ def update_order_status(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_admin_user),
 ):
+    if status not in VALID_ORDER_STATUSES:
+        raise HTTPException(status_code=400, detail="Invalid order status")
+
     order = db.query(models.Order).filter(models.Order.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
 
     order.status = status
     db.commit()
+    logger.info("admin updated order status admin_id=%s order_id=%s status=%s", current_user.id, order_id, status)
     return {"message": "Order status updated"}
 
 
@@ -945,16 +1183,12 @@ def admin_print_summary(
     current_user: models.User = Depends(get_current_admin_user),
 ):
     summary = (
-        db.query(
+        get_pending_print_queue_query(db)
+        .with_entities(
             models.OrderItem.item_name.label("item_name"),
             models.OrderItem.mode.label("mode"),
             models.OrderItem.print_type.label("print_type"),
             func.sum(models.OrderItem.quantity).label("quantity"),
-        )
-        .join(models.Order, models.Order.id == models.OrderItem.order_id)
-        .filter(
-            models.OrderItem.printed.is_(False),
-            models.Order.status.in_(["paid", "printing", "ready"]),
         )
         .group_by(
             models.OrderItem.item_name,
@@ -965,6 +1199,7 @@ def admin_print_summary(
         .all()
     )
 
+    logger.info("admin viewed print summary admin_id=%s groups=%s", current_user.id, len(summary))
     return [
         {
             "item_name": row.item_name or "Unnamed item",
@@ -976,20 +1211,28 @@ def admin_print_summary(
     ]
 
 
+@app.get("/admin/print-queue")
+def admin_print_queue(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    summary = admin_print_summary(db=db, current_user=current_user)
+    return [
+        {
+            **item,
+            "group_id": encode_print_group_id(item["item_name"], item["mode"], item["print_type"]),
+        }
+        for item in summary
+    ]
+
+
 @app.post("/admin/print-complete")
 def admin_print_complete(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_admin_user),
 ):
     pending_item_ids = [
-        item_id
-        for (item_id,) in db.query(models.OrderItem.id)
-        .join(models.Order, models.Order.id == models.OrderItem.order_id)
-        .filter(
-            models.OrderItem.printed.is_(False),
-            models.Order.status.in_(["paid", "printing", "ready"]),
-        )
-        .all()
+        item.id for item in get_pending_print_queue_query(db).all()
     ]
 
     updated_count = 0
@@ -1000,4 +1243,79 @@ def admin_print_complete(
             .update({"printed": True}, synchronize_session=False)
         )
     db.commit()
+    logger.info("admin completed print queue admin_id=%s updated_count=%s", current_user.id, updated_count)
     return {"message": "Print queue marked completed", "updated_count": updated_count}
+
+
+@app.post("/admin/print-queue/start")
+def admin_print_queue_start(
+    payload: schemas.PrintQueueAction,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    queue_items = apply_print_queue_filters(
+        get_pending_print_queue_query(db),
+        payload.item_name,
+        payload.mode,
+        payload.print_type,
+    ).all()
+    if not queue_items:
+        raise HTTPException(status_code=404, detail="Print queue item not found")
+
+    order_ids = {item.order_id for item in queue_items}
+    (
+        db.query(models.Order)
+        .filter(models.Order.id.in_(order_ids))
+        .update({"status": "printing"}, synchronize_session=False)
+    )
+    db.commit()
+    logger.info("admin started print queue admin_id=%s item=%s orders=%s", current_user.id, payload.item_name, len(order_ids))
+    return {"message": "Printing started"}
+
+
+@app.post("/admin/start-print/{group_id}")
+def admin_start_print_by_group(
+    group_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    item_name, mode, print_type = decode_print_group_id(group_id)
+    payload = schemas.PrintQueueAction(item_name=item_name, mode=mode, print_type=print_type)
+    return admin_print_queue_start(payload=payload, db=db, current_user=current_user)
+
+
+@app.post("/admin/print-queue/complete")
+def admin_print_queue_complete(
+    payload: schemas.PrintQueueAction,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    queue_items = apply_print_queue_filters(
+        get_pending_print_queue_query(db),
+        payload.item_name,
+        payload.mode,
+        payload.print_type,
+    ).all()
+    if not queue_items:
+        raise HTTPException(status_code=404, detail="Print queue item not found")
+
+    item_ids = [item.id for item in queue_items]
+    (
+        db.query(models.OrderItem)
+        .filter(models.OrderItem.id.in_(item_ids))
+        .update({"printed": True}, synchronize_session=False)
+    )
+    db.commit()
+    logger.info("admin completed print queue group admin_id=%s item=%s count=%s", current_user.id, payload.item_name, len(item_ids))
+    return {"message": "Queue item marked printed"}
+
+
+@app.post("/admin/mark-printed/{group_id}")
+def admin_mark_printed_by_group(
+    group_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    item_name, mode, print_type = decode_print_group_id(group_id)
+    payload = schemas.PrintQueueAction(item_name=item_name, mode=mode, print_type=print_type)
+    return admin_print_queue_complete(payload=payload, db=db, current_user=current_user)

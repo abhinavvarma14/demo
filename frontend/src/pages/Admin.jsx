@@ -1,11 +1,24 @@
 import { useEffect, useState } from "react"
+import { useNavigate } from "react-router-dom"
 import API, { API_BASE_URL } from "../api/api"
+import toast from "react-hot-toast"
+import { getApiErrorMessage } from "../utils/apiError"
 
-function Admin() {
+function Admin({ defaultSection = "orders" }) {
+  const navigate = useNavigate()
   const [orders, setOrders] = useState([])
   const [printSummary, setPrintSummary] = useState([])
   const [books, setBooks] = useState([])
-  const [activeSection, setActiveSection] = useState("books")
+  const [analytics, setAnalytics] = useState({
+    total_orders: 0,
+    pending_orders: 0,
+    printing_orders: 0,
+    completed_orders: 0,
+    total_revenue: 0,
+  })
+  const [loading, setLoading] = useState(true)
+  const [actionLoading, setActionLoading] = useState("")
+  const [activeSection, setActiveSection] = useState(defaultSection)
   const [newBook, setNewBook] = useState({ name: "", year: "" })
   const [newOption, setNewOption] = useState({
     book_id: "",
@@ -14,13 +27,17 @@ function Admin() {
     price: "",
   })
 
+  useEffect(() => {
+    setActiveSection(defaultSection)
+  }, [defaultSection])
+
   const fetchOrders = async () => {
     try {
       const res = await API.get("/admin/orders")
       setOrders(res.data)
     } catch (err) {
       console.log(err)
-      alert("Admin access required")
+      toast.error(getApiErrorMessage(err))
     }
   }
 
@@ -36,78 +53,143 @@ function Admin() {
       }
     } catch (err) {
       console.log(err)
+      toast.error(getApiErrorMessage(err))
     }
   }
 
   const fetchPrintSummary = async () => {
     try {
-      const res = await API.get("/admin/print-summary")
+      const res = await API.get("/admin/print-queue")
       setPrintSummary(res.data)
     } catch (err) {
       console.log(err)
+      toast.error(getApiErrorMessage(err))
+    }
+  }
+
+  const fetchAnalytics = async () => {
+    try {
+      const res = await API.get("/admin/dashboard")
+      setAnalytics(res.data)
+    } catch (err) {
+      console.log(err)
+      toast.error(getApiErrorMessage(err))
     }
   }
 
   useEffect(() => {
-    fetchOrders()
-    fetchBooks()
-    fetchPrintSummary()
+    const load = async () => {
+      setLoading(true)
+      await Promise.all([fetchOrders(), fetchBooks(), fetchPrintSummary(), fetchAnalytics()])
+      setLoading(false)
+    }
+
+    load()
   }, [])
+
+  const refreshAdminData = async () => {
+    await Promise.all([fetchOrders(), fetchPrintSummary(), fetchAnalytics()])
+  }
 
   const updateStatus = async (id, status) => {
 
     try {
+      setActionLoading(`${id}-${status}`)
 
       await API.put(`/admin/orders/${id}/status?status=${status}`)
 
-      alert("Order updated")
+      toast.success("Order updated")
 
-      fetchOrders()
-      fetchPrintSummary()
+      await refreshAdminData()
 
-    } catch {
+    } catch (error) {
+      console.log(error)
+      toast.error(getApiErrorMessage(error, "Failed to update"))
 
-      alert("Failed to update")
-
+    } finally {
+      setActionLoading("")
     }
 
   }
 
   const markAllPrinted = async () => {
     try {
+      setActionLoading("print-complete")
       await API.post("/admin/print-complete")
-      alert("Print summary reset")
-      fetchPrintSummary()
+      toast.success("Print summary reset")
+      await refreshAdminData()
     } catch (error) {
       console.log(error)
-      alert("Failed to mark all printed")
+      toast.error(getApiErrorMessage(error, "Failed to mark all printed"))
+    } finally {
+      setActionLoading("")
+    }
+  }
+
+  const startPrinting = async (item) => {
+    try {
+      setActionLoading(`queue-start-${item.item_name}-${item.mode}-${item.print_type}`)
+      await API.post("/admin/print-queue/start", {
+        item_name: item.item_name,
+        mode: item.mode,
+        print_type: item.print_type,
+      })
+      toast.success("Printing started")
+      await refreshAdminData()
+    } catch (error) {
+      console.log(error)
+      toast.error(getApiErrorMessage(error, "Failed to start printing"))
+    } finally {
+      setActionLoading("")
+    }
+  }
+
+  const markQueueItemPrinted = async (item) => {
+    try {
+      setActionLoading(`queue-complete-${item.item_name}-${item.mode}-${item.print_type}`)
+      await API.post("/admin/print-queue/complete", {
+        item_name: item.item_name,
+        mode: item.mode,
+        print_type: item.print_type,
+      })
+      toast.success("Queue item marked printed")
+      await refreshAdminData()
+    } catch (error) {
+      console.log(error)
+      toast.error(getApiErrorMessage(error, "Failed to mark queue item printed"))
+    } finally {
+      setActionLoading("")
     }
   }
 
   const createBook = async () => {
     if (!newBook.name || !newBook.year) {
-      alert("Enter book name and year")
+      toast.error("Enter book name and year")
       return
     }
 
     try {
+      setActionLoading("create-book")
       await API.post("/admin/books", newBook)
       setNewBook({ name: "", year: "" })
-      fetchBooks()
-      alert("Book created")
+      await fetchBooks()
+      toast.success("Book created")
     } catch (error) {
       console.log(error)
-      alert("Failed to create book")
+      toast.error(getApiErrorMessage(error, "Failed to create book"))
+    } finally {
+      setActionLoading("")
     }
   }
 
   const createBookOption = async () => {
     if (!newOption.book_id || !newOption.mode || !newOption.price) {
-      alert("Fill all option fields")
+      toast.error("Fill all option fields")
       return
     }
 
     try {
+      setActionLoading("create-option")
       await API.post("/admin/book-options", {
         book_id: Number(newOption.book_id),
         mode: newOption.mode,
@@ -120,11 +202,13 @@ function Admin() {
         print_type: "single",
         price: "",
       }))
-      fetchBooks()
-      alert("Book option added")
+      await fetchBooks()
+      toast.success("Book option added")
     } catch (error) {
       console.log(error)
-      alert("Failed to add option")
+      toast.error(getApiErrorMessage(error, "Failed to add option"))
+    } finally {
+      setActionLoading("")
     }
   }
 
@@ -144,41 +228,91 @@ function Admin() {
 
   const saveOption = async (bookId, option) => {
     try {
+      setActionLoading(`save-option-${option.id}`)
       await API.put(`/admin/book-options/${option.id}`, {
         mode: option.mode,
         print_type: option.print_type,
         price: Number(option.price),
       })
-      fetchBooks()
-      alert("Option updated")
+      await fetchBooks()
+      toast.success("Option updated")
     } catch (error) {
       console.log(error)
-      alert("Failed to update option")
+      toast.error(getApiErrorMessage(error, "Failed to update option"))
+    } finally {
+      setActionLoading("")
     }
   }
 
   const deleteOption = async (optionId) => {
     try {
+      setActionLoading(`delete-option-${optionId}`)
       await API.delete(`/admin/book-options/${optionId}`)
-      fetchBooks()
-      alert("Option deleted")
+      await fetchBooks()
+      toast.success("Option deleted")
     } catch (error) {
       console.log(error)
-      alert("Failed to delete option")
+      toast.error(getApiErrorMessage(error, "Failed to delete option"))
+    } finally {
+      setActionLoading("")
     }
   }
 
-  const today = new Date().toISOString().slice(0, 10)
-  const paidOrders = orders.filter((order) => order.status !== "pending")
-  const todaysOrders = paidOrders.filter((order) => {
-    if (!order.created_at) {
-      return false
+  const handleBookChange = (bookId, field, value) => {
+    setBooks((currentBooks) =>
+      currentBooks.map((book) =>
+        book.id === bookId ? { ...book, [field]: value } : book
+      )
+    )
+  }
+
+  const saveBook = async (book) => {
+    try {
+      setActionLoading(`save-book-${book.id}`)
+      await API.put(`/admin/books/${book.id}`, {
+        name: book.name,
+        year: book.year,
+        is_active: book.is_active,
+      })
+      await fetchBooks()
+      toast.success("Book updated")
+    } catch (error) {
+      console.log(error)
+      toast.error(getApiErrorMessage(error, "Failed to update book"))
+    } finally {
+      setActionLoading("")
     }
-    return order.created_at.slice(0, 10) === today
-  })
-  const deliveryOrders = paidOrders.filter((order) =>
-    ["paid", "printing", "ready"].includes(order.status)
-  )
+  }
+
+  const deleteBook = async (bookId) => {
+    try {
+      setActionLoading(`delete-book-${bookId}`)
+      await API.delete(`/admin/books/${bookId}`)
+      await fetchBooks()
+      toast.success("Book deleted")
+    } catch (error) {
+      console.log(error)
+      toast.error(getApiErrorMessage(error, "Failed to delete book"))
+    } finally {
+      setActionLoading("")
+    }
+  }
+
+  const paidOrders = orders.filter((order) => order.status !== "pending")
+  const bulkCopies = printSummary.reduce((sum, item) => sum + item.quantity, 0)
+
+  const goToSection = (section) => {
+    setActiveSection(section)
+    if (section === "books") {
+      navigate("/admin/books")
+      return
+    }
+    if (section === "printQueue") {
+      navigate("/admin/print-queue")
+      return
+    }
+    navigate("/admin")
+  }
 
   return (
 
@@ -191,19 +325,46 @@ function Admin() {
       <div className="grid grid-cols-2 gap-3 mb-6">
         <div className="bg-white/5 border border-white/10 rounded-xl p-4">
           <p className="text-gray-400 text-sm">
-            Orders Received Today
+            Total Orders
           </p>
           <p className="text-2xl font-bold text-yellow-400 mt-1">
-            {todaysOrders.length}
+            {analytics.total_orders}
           </p>
         </div>
 
         <div className="bg-white/5 border border-white/10 rounded-xl p-4">
           <p className="text-gray-400 text-sm">
-            Total Books
+            Pending Orders
           </p>
           <p className="text-2xl font-bold text-yellow-400 mt-1">
-            {books.length}
+            {analytics.pending_orders}
+          </p>
+        </div>
+
+        <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+          <p className="text-gray-400 text-sm">
+            Printing Orders
+          </p>
+          <p className="text-2xl font-bold text-yellow-400 mt-1">
+            {analytics.printing_orders}
+          </p>
+        </div>
+
+        <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+          <p className="text-gray-400 text-sm">
+            Completed Orders
+          </p>
+          <p className="text-2xl font-bold text-yellow-400 mt-1">
+            {analytics.completed_orders}
+          </p>
+        </div>
+
+        <div className="bg-white/5 border border-white/10 rounded-xl p-4 col-span-2">
+          <p className="text-gray-400 text-sm">
+            Total Revenue
+          </p>
+          <p className="text-2xl font-bold text-yellow-400 mt-1">
+            ₹{Number(analytics.total_revenue || 0).toFixed(2)}
           </p>
         </div>
 
@@ -214,15 +375,16 @@ function Admin() {
                 Bulk Print Summary
               </p>
               <p className="text-2xl font-bold text-yellow-400 mt-1">
-                {printSummary.reduce((sum, item) => sum + item.quantity, 0)}
+                {bulkCopies}
               </p>
             </div>
 
             <button
               onClick={markAllPrinted}
+              disabled={actionLoading === "print-complete"}
               className="bg-yellow-400 text-black px-4 py-2 rounded-xl font-semibold"
             >
-              Mark All Printed
+              {actionLoading === "print-complete" ? "Processing..." : "Mark Printed"}
             </button>
           </div>
 
@@ -276,9 +438,13 @@ function Admin() {
         </div>
       </div>
 
-      <div className="flex gap-3 mb-6">
+      {loading && (
+        <div className="bg-white/5 border border-white/10 rounded-xl p-4 mb-6 h-40 animate-pulse" />
+      )}
+
+      {!loading && <div className="flex gap-3 mb-6">
         <button
-          onClick={() => setActiveSection("books")}
+          onClick={() => goToSection("books")}
           className={`flex-1 py-3 rounded-xl border transition ${
             activeSection === "books"
               ? "bg-yellow-400 text-black border-yellow-400"
@@ -289,7 +455,7 @@ function Admin() {
         </button>
 
         <button
-          onClick={() => setActiveSection("orders")}
+          onClick={() => goToSection("orders")}
           className={`flex-1 py-3 rounded-xl border transition ${
             activeSection === "orders"
               ? "bg-yellow-400 text-black border-yellow-400"
@@ -300,18 +466,18 @@ function Admin() {
         </button>
 
         <button
-          onClick={() => setActiveSection("delivery")}
+          onClick={() => goToSection("printQueue")}
           className={`flex-1 py-3 rounded-xl border transition ${
-            activeSection === "delivery"
+            activeSection === "printQueue"
               ? "bg-yellow-400 text-black border-yellow-400"
               : "bg-white/5 border-white/10 text-gray-300"
           }`}
         >
-          Delivery
+          Print Queue
         </button>
-      </div>
+      </div>}
 
-      {activeSection === "books" && (
+      {!loading && activeSection === "books" && (
         <>
           <div className="bg-white/5 border border-white/10 rounded-xl p-4 mb-6">
             <h2 className="text-lg font-semibold mb-4">
@@ -335,9 +501,10 @@ function Admin() {
 
               <button
                 onClick={createBook}
+                disabled={actionLoading === "create-book"}
                 className="bg-yellow-400 text-black py-2 rounded-xl font-semibold"
               >
-                Add Book
+                {actionLoading === "create-book" ? "Processing..." : "Add Book"}
               </button>
             </div>
           </div>
@@ -393,9 +560,10 @@ function Admin() {
 
               <button
                 onClick={createBookOption}
+                disabled={actionLoading === "create-option"}
                 className="bg-yellow-400 text-black py-2 rounded-xl font-semibold"
               >
-                Add Option
+                {actionLoading === "create-option" ? "Processing..." : "Add Option"}
               </button>
             </div>
           </div>
@@ -405,18 +573,48 @@ function Admin() {
               Books & Pricing
             </h2>
 
+            {books.length === 0 && (
+              <p className="text-gray-400">
+                No books available
+              </p>
+            )}
+
             {books.map((book) => (
               <div
                 key={book.id}
                 className="bg-white/5 border border-white/10 rounded-xl p-4 mb-4"
               >
-                <p className="text-gray-200 font-semibold">
-                  {book.name}
-                </p>
+                <div className="grid gap-3 mb-3">
+                  <input
+                    value={book.name}
+                    onChange={(event) => handleBookChange(book.id, "name", event.target.value)}
+                    className="bg-white/5 border border-white/10 rounded-xl p-3"
+                  />
 
-                <p className="text-gray-400 text-sm mb-3">
-                  {book.year}
-                </p>
+                  <input
+                    value={book.year}
+                    onChange={(event) => handleBookChange(book.id, "year", event.target.value)}
+                    className="bg-white/5 border border-white/10 rounded-xl p-3"
+                  />
+                </div>
+
+                <div className="flex gap-2 mb-3">
+                  <button
+                    onClick={() => saveBook(book)}
+                    disabled={actionLoading === `save-book-${book.id}`}
+                    className="bg-green-500 text-black px-3 py-2 rounded"
+                  >
+                    {actionLoading === `save-book-${book.id}` ? "Processing..." : "Save Book"}
+                  </button>
+
+                  <button
+                    onClick={() => deleteBook(book.id)}
+                    disabled={actionLoading === `delete-book-${book.id}`}
+                    className="bg-red-500 text-black px-3 py-2 rounded"
+                  >
+                    {actionLoading === `delete-book-${book.id}` ? "Processing..." : "Delete Book"}
+                  </button>
+                </div>
 
                 {(book.options || []).length === 0 && (
                   <p className="text-gray-500 text-sm">
@@ -457,16 +655,18 @@ function Admin() {
                     <div className="flex gap-2 mt-3">
                       <button
                         onClick={() => saveOption(book.id, option)}
+                        disabled={actionLoading === `save-option-${option.id}`}
                         className="bg-green-500 text-black px-3 py-2 rounded"
                       >
-                        Save
+                        {actionLoading === `save-option-${option.id}` ? "Processing..." : "Save"}
                       </button>
 
                       <button
                         onClick={() => deleteOption(option.id)}
+                        disabled={actionLoading === `delete-option-${option.id}`}
                         className="bg-red-500 text-black px-3 py-2 rounded"
                       >
-                        Delete
+                        {actionLoading === `delete-option-${option.id}` ? "Processing..." : "Delete"}
                       </button>
                     </div>
                   </div>
@@ -477,7 +677,7 @@ function Admin() {
         </>
       )}
 
-      {activeSection === "orders" && (
+      {!loading && activeSection === "orders" && (
         <>
           {paidOrders.length === 0 && (
             <p className="text-gray-400">
@@ -538,23 +738,26 @@ function Admin() {
               <div className="flex gap-2 mt-4">
                 <button
                   onClick={() => updateStatus(order.id, "printing")}
+                  disabled={actionLoading === `${order.id}-printing`}
                   className="bg-yellow-400 text-black px-3 py-1 rounded"
                 >
-                  Printing
+                  {actionLoading === `${order.id}-printing` ? "Processing..." : "Printing"}
                 </button>
 
                 <button
                   onClick={() => updateStatus(order.id, "ready")}
+                  disabled={actionLoading === `${order.id}-ready`}
                   className="bg-green-500 text-black px-3 py-1 rounded"
                 >
-                  Ready
+                  {actionLoading === `${order.id}-ready` ? "Processing..." : "Ready"}
                 </button>
 
                 <button
                   onClick={() => updateStatus(order.id, "delivered")}
+                  disabled={actionLoading === `${order.id}-delivered`}
                   className="bg-blue-500 text-black px-3 py-1 rounded"
                 >
-                  Delivered
+                  {actionLoading === `${order.id}-delivered` ? "Processing..." : "Delivered"}
                 </button>
               </div>
             </div>
@@ -562,92 +765,103 @@ function Admin() {
         </>
       )}
 
-      {activeSection === "delivery" && (
-        <>
-          {deliveryOrders.length === 0 && (
-            <p className="text-gray-400">
-              No delivery orders available
-            </p>
-          )}
-
-          {deliveryOrders.map((order) => (
-            <div
-              key={order.id}
-              className="bg-white/5 border border-white/10 rounded-xl p-4 mb-4"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-gray-200 font-semibold">
-                    {order.user?.username || "Unknown user"}
-                  </p>
-                  <p className="text-gray-400 text-sm">
-                    Order ID: {order.id}
-                  </p>
-                </div>
-
-                <p className="text-yellow-400 font-semibold">
-                  {order.status}
-                </p>
-              </div>
-
-              <div className="mt-4 space-y-2 text-sm">
-                <p className="text-gray-300">
-                  Delivery Type: <span className="text-gray-400">{order.delivery_type || "-"}</span>
-                </p>
-
-                <p className="text-gray-300">
-                  Delivery Location: <span className="text-gray-400">{order.hostel_name || "Day Scholar / Not provided"}</span>
-                </p>
-
-                <p className="text-gray-300">
-                  Contact: <span className="text-gray-400">{order.contact_number || "-"}</span>
-                </p>
-
-                <p className="text-gray-300">
-                  Alternate Contact: <span className="text-gray-400">{order.alternate_contact_number || "-"}</span>
-                </p>
-
-                <p className="text-gray-300">
-                  Amount Paid: <span className="text-yellow-400">₹{order.total_amount}</span>
-                </p>
-              </div>
-
-              <div className="mt-4 border-t border-white/5 pt-3">
-                <p className="text-gray-300 font-medium mb-2">
-                  Items To Deliver
-                </p>
-
-                {(order.items || []).map((item) => (
-                  <div key={item.id} className="mb-2 last:mb-0">
-                    <p className="text-gray-300 text-sm">
-                      {item.item_name || "Unnamed item"}
-                    </p>
-
-                    <p className="text-gray-500 text-xs">
-                      {item.mode || "-"} • {item.print_type === "single" ? "Single Side" : item.print_type === "double" ? "Double Side" : item.print_type || "-"} • Qty {item.quantity}
-                    </p>
-                  </div>
-                ))}
-              </div>
-
-              <div className="flex gap-2 mt-4">
-                <button
-                  onClick={() => updateStatus(order.id, "ready")}
-                  className="bg-green-500 text-black px-3 py-1 rounded"
-                >
-                  Mark Ready
-                </button>
-
-                <button
-                  onClick={() => updateStatus(order.id, "delivered")}
-                  className="bg-blue-500 text-black px-3 py-1 rounded"
-                >
-                  Mark Delivered
-                </button>
-              </div>
+      {!loading && activeSection === "printQueue" && (
+        <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+          <div className="flex items-center justify-between gap-3 mb-4">
+            <div>
+              <h2 className="text-lg font-semibold">
+                Printer Queue
+              </h2>
+              <p className="text-sm text-gray-400">
+                Grouped bulk items waiting to be printed
+              </p>
             </div>
-          ))}
-        </>
+
+            <button
+              onClick={markAllPrinted}
+              disabled={actionLoading === "print-complete"}
+              className="bg-yellow-400 text-black px-4 py-2 rounded-xl font-semibold"
+            >
+              {actionLoading === "print-complete" ? "Processing..." : "Mark Printed"}
+            </button>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr className="text-gray-400">
+                  <th className="pb-3 font-normal">
+                    Book
+                  </th>
+                  <th className="pb-3 font-normal">
+                    Mode
+                  </th>
+                  <th className="pb-3 font-normal">
+                    Print
+                  </th>
+                  <th className="pb-3 font-normal">
+                    Copies
+                  </th>
+                  <th className="pb-3 font-normal">
+                    Actions
+                  </th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {printSummary.length === 0 && (
+                  <tr>
+                    <td colSpan="5" className="py-3 text-gray-500">
+                      No pending bulk print items
+                    </td>
+                  </tr>
+                )}
+
+                {printSummary.map((item) => {
+                  const queueKey = `${item.item_name}-${item.mode}-${item.print_type}`
+                  const startKey = `queue-start-${item.item_name}-${item.mode}-${item.print_type}`
+                  const completeKey = `queue-complete-${item.item_name}-${item.mode}-${item.print_type}`
+
+                  return (
+                    <tr key={queueKey} className="border-t border-white/5">
+                      <td className="py-3 text-gray-300">
+                        {item.item_name}
+                      </td>
+                      <td className="py-3 text-gray-400">
+                        {item.mode || "-"}
+                      </td>
+                      <td className="py-3 text-gray-400">
+                        {item.print_type === "single" ? "Single" : item.print_type === "double" ? "Double" : item.print_type || "-"}
+                      </td>
+                      <td className="py-3 text-yellow-400">
+                        {item.quantity}
+                      </td>
+                      <td className="py-3">
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => startPrinting(item)}
+                            disabled={actionLoading === startKey}
+                            className="bg-yellow-400 text-black px-3 py-1 rounded"
+                          >
+                            {actionLoading === startKey ? "Processing..." : "Start Printing"}
+                          </button>
+
+                          <button
+                            onClick={() => markQueueItemPrinted(item)}
+                            disabled={actionLoading === completeKey}
+                            className="bg-green-500 text-black px-3 py-1 rounded"
+                          >
+                            {actionLoading === completeKey ? "Processing..." : "Mark Printed"}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
       )}
 
     </div>

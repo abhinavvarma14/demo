@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom"
 import API from "../api/api"
 import toast from "react-hot-toast"
 import { getUserRole } from "../utils/auth"
+import { getApiErrorMessage } from "../utils/apiError"
 
 function Login() {
 
@@ -10,12 +11,14 @@ const navigate = useNavigate()
 
 const [username, setUsername] = useState("")
 const [password, setPassword] = useState("")
+const [submitting, setSubmitting] = useState(false)
 
 const handleLogin = async (e) => {
 
 e.preventDefault()
 
 try {
+  setSubmitting(true)
 
   const params = new URLSearchParams()
 
@@ -42,12 +45,10 @@ try {
 
   console.log(error)
 
-  if (error.response?.data?.detail) {
-    toast.error(error.response.data.detail)
-  } else {
-    toast.error("Login failed")
-  }
+  toast.error(getApiErrorMessage(error, "Login failed"))
 
+} finally {
+  setSubmitting(false)
 }
 
 }
@@ -82,9 +83,10 @@ return (
 
     <button
       type="submit"
+      disabled={submitting}
       className="w-full bg-yellow-400 text-black py-3 rounded-xl font-semibold hover:bg-yellow-300 transition"
     >
-      Login
+      {submitting ? "Processing..." : "Login"}
     </button>
 
     <p className="text-center text-gray-400 text-sm mt-4">

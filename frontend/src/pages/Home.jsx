@@ -3,6 +3,8 @@ import { useNavigate } from "react-router-dom"
 import { Upload } from "lucide-react"
 import API from "../api/api"
 import BookCard from "../components/BookCard"
+import toast from "react-hot-toast"
+import { getApiErrorMessage } from "../utils/apiError"
 
 function Home(){
   const navigate = useNavigate()
@@ -16,6 +18,7 @@ function Home(){
         setBooks(res.data)
       } catch (error) {
         console.log(error)
+        toast.error(getApiErrorMessage(error))
       } finally {
         setLoading(false)
       }
@@ -32,9 +35,11 @@ function Home(){
 
       <div className="grid grid-cols-2 gap-4">
         {loading && (
-          <div className="col-span-2 text-gray-400">
-            Loading books...
-          </div>
+          <>
+            {[1, 2, 3, 4].map((item) => (
+              <div key={item} className="bg-white/5 border border-white/10 rounded-2xl p-4 h-40 animate-pulse" />
+            ))}
+          </>
         )}
 
         {!loading && books.length === 0 && (

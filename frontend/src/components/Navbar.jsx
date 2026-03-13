@@ -6,7 +6,7 @@ function Navbar(){
   const navigate = useNavigate()
   const location = useLocation()
 
-  if (location.pathname === "/admin") {
+  if (location.pathname.startsWith("/admin")) {
     return null
   }
 

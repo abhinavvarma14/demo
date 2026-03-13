@@ -63,7 +63,23 @@ function App() {
           path="/admin"
           element={
             <ProtectedRoute role="admin">
-              <Admin />
+              <Admin defaultSection="orders" />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin/books"
+          element={
+            <ProtectedRoute role="admin">
+              <Admin defaultSection="books" />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin/print-queue"
+          element={
+            <ProtectedRoute role="admin">
+              <Admin defaultSection="printQueue" />
             </ProtectedRoute>
           }
         />

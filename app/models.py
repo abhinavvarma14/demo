@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
@@ -11,7 +11,7 @@ class User(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True, nullable=False)
-    password = Column(String, nullable=False)
+    password_hash = Column(String, nullable=False)
     role = Column(String, default="user")
 
     uploads = relationship("Upload", back_populates="user", cascade="all, delete")
@@ -36,7 +36,7 @@ class BookOption(Base):
     __tablename__ = "book_options"
 
     id = Column(Integer, primary_key=True, index=True)
-    book_id = Column(Integer, ForeignKey("books.id"), nullable=False)
+    book_id = Column(Integer, ForeignKey("books.id"), nullable=False, index=True)
     mode = Column(String, nullable=False)
     print_type = Column(String, nullable=False)
     price = Column(Float, nullable=False)
@@ -68,7 +68,7 @@ class Upload(Base):
     print_type = Column(String, nullable=True)
     copies = Column(Integer, default=1)
     calculated_price = Column(Float, default=0)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     user = relationship("User", back_populates="uploads")
     cart_items = relationship("CartItem", back_populates="upload")
@@ -110,7 +110,7 @@ class Order(Base):
     razorpay_order_id = Column(String, nullable=True)
     razorpay_payment_id = Column(String, nullable=True)
     status = Column(String, default="pending")
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     user = relationship("User", back_populates="orders")
     items = relationship("OrderItem", back_populates="order", cascade="all, delete")
@@ -120,10 +120,10 @@ class OrderItem(Base):
     __tablename__ = "order_items"
 
     id = Column(Integer, primary_key=True, index=True)
-    order_id = Column(Integer, ForeignKey("orders.id"), nullable=False)
+    order_id = Column(Integer, ForeignKey("orders.id"), nullable=False, index=True)
     item_type = Column(String, nullable=False)
     reference_id = Column(Integer, nullable=True)
-    book_id = Column(Integer, ForeignKey("books.id"), nullable=True)
+    book_id = Column(Integer, ForeignKey("books.id"), nullable=True, index=True)
     upload_id = Column(Integer, ForeignKey("uploads.id"), nullable=True)
     item_name = Column(String, nullable=True)
     stored_filename = Column(String, nullable=True)
@@ -135,7 +135,7 @@ class OrderItem(Base):
     unit_price = Column(Float, default=0)
     calculated_price = Column(Float, default=0)
     total_price = Column(Float, default=0)
-    printed = Column(Boolean, default=False)
+    printed = Column(Boolean, default=False, index=True)
 
     order = relationship("Order", back_populates="items")
     upload = relationship("Upload", back_populates="order_items")

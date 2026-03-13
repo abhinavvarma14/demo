@@ -2,6 +2,7 @@ import { useState } from "react"
 import { useNavigate } from "react-router-dom"
 import API from "../api/api"
 import toast from "react-hot-toast"
+import { getApiErrorMessage } from "../utils/apiError"
 
 function Signup() {
 
@@ -10,6 +11,7 @@ const navigate = useNavigate()
 const [username, setUsername] = useState("")
 const [password, setPassword] = useState("")
 const [confirmPassword, setConfirmPassword] = useState("")
+const [submitting, setSubmitting] = useState(false)
 
 const handleSignup = async (e) => {
 
@@ -24,6 +26,7 @@ if (password !== confirmPassword) {
 }
 
 try {
+  setSubmitting(true)
 
   await API.post("/signup", {
     username,
@@ -41,9 +44,11 @@ try {
   if (error.response?.data?.detail === "Username already exists") {
     toast.error("Username already exists")
   } else {
-    toast.error("Signup failed")
+    toast.error(getApiErrorMessage(error, "Signup failed"))
   }
 
+} finally {
+  setSubmitting(false)
 }
 
 }
@@ -86,9 +91,10 @@ return (
 
     <button
       type="submit"
+      disabled={submitting}
       className="w-full bg-yellow-400 text-black py-3 rounded-xl font-semibold hover:bg-yellow-300 transition"
     >
-      Create Account
+      {submitting ? "Processing..." : "Create Account"}
     </button>
 
     <p className="text-center text-gray-400 text-sm mt-4">

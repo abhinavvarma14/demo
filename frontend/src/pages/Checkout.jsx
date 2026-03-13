@@ -2,6 +2,7 @@ import { useState, useEffect } from "react"
 import { useNavigate } from "react-router-dom"
 import API from "../api/api"
 import toast from "react-hot-toast"
+import { getApiErrorMessage } from "../utils/apiError"
 
 function Checkout() {
   const navigate = useNavigate()
@@ -20,7 +21,10 @@ function Checkout() {
       } catch (error) {
         console.log(error)
         if (error.response?.status === 401) {
+          toast.error("Please login to continue")
           navigate("/login")
+        } else {
+          toast.error(getApiErrorMessage(error))
         }
       }
     }
@@ -31,7 +35,7 @@ function Checkout() {
   const handlePayment = async () => {
     try {
       if (!localStorage.getItem("token")) {
-        toast.error("Please login first")
+        toast.error("Please login to continue")
         navigate("/login")
         return
       }
@@ -71,7 +75,7 @@ function Checkout() {
     }
     catch (error) {
       console.log(error)
-      toast.error(error.response?.data?.detail || "Payment failed")
+      toast.error(getApiErrorMessage(error, "Payment failed"))
     } finally {
       setSubmitting(false)
     }

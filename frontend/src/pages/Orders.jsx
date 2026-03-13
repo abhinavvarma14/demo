@@ -1,9 +1,12 @@
 import { useEffect, useState } from "react"
 import API from "../api/api"
 import toast from "react-hot-toast"
+import { getApiErrorMessage } from "../utils/apiError"
 
 function Orders(){
   const [orders,setOrders] = useState([])
+  const [loading, setLoading] = useState(true)
+  const statusSteps = ["pending", "printing", "ready", "delivered"]
 
   const fetchOrders = async () => {
     try {
@@ -11,7 +14,9 @@ function Orders(){
       setOrders(res.data)
     } catch (error) {
       console.log(error)
-      toast.error("Login required")
+      toast.error(getApiErrorMessage(error))
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -25,13 +30,21 @@ function Orders(){
         My Orders
       </h1>
 
-      {orders.length === 0 && (
+      {loading && (
+        <>
+          {[1, 2].map((item) => (
+            <div key={item} className="bg-white/5 border border-white/10 rounded-xl p-4 mb-4 h-28 animate-pulse" />
+          ))}
+        </>
+      )}
+
+      {!loading && orders.length === 0 && (
         <p className="text-gray-400">
           No orders yet
         </p>
       )}
 
-      {orders.map((order) => (
+      {!loading && orders.map((order) => (
         <div
           key={order.id}
           className="bg-white/5 border border-white/10 rounded-xl p-4 mb-4"
@@ -47,6 +60,20 @@ function Orders(){
           <p className="text-gray-400">
             Status: {order.status}
           </p>
+
+          <div className="mt-3 flex gap-2 flex-wrap">
+            {statusSteps.map((step) => {
+              const reached = statusSteps.indexOf(order.status) >= statusSteps.indexOf(step)
+              return (
+                <span
+                  key={step}
+                  className={`px-3 py-1 rounded-full text-xs border ${reached ? "border-yellow-400 text-yellow-400" : "border-white/10 text-gray-500"}`}
+                >
+                  {step.charAt(0).toUpperCase() + step.slice(1)}
+                </span>
+              )
+            })}
+          </div>
 
           <div className="mt-3 space-y-2">
             {(order.items || []).map((item) => (
