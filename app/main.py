@@ -32,6 +32,8 @@ logger = logging.getLogger("batprint")
 LOGIN_WINDOW_SECONDS = int(os.getenv("LOGIN_WINDOW_SECONDS", "300"))
 LOGIN_MAX_ATTEMPTS = int(os.getenv("LOGIN_MAX_ATTEMPTS", "5"))
 login_attempts: dict[str, list[float]] = {}
+PDF_PRICE_PER_PAGE = 1.25
+PDF_BASE_CHARGE = 60.0
 
 def get_required_env(name: str) -> str:
     value = os.getenv(name)
@@ -273,6 +275,10 @@ def validate_print_type_or_raise(value: str | None):
     return normalized
 
 
+def calculate_pdf_total(total_pages: int, copies: int = 1) -> float:
+    return (total_pages * max(copies, 1) * PDF_PRICE_PER_PAGE) + PDF_BASE_CHARGE
+
+
 VALID_ORDER_STATUSES = {"pending", "paid", "printing", "ready", "delivered"}
 
 
@@ -467,6 +473,12 @@ def get_book_option(db: Session, book_id: int, mode: str, print_type: str):
     return option
 
 
+def normalize_book_mode(value: str | None):
+    if value is None:
+        return ""
+    return value.strip()
+
+
 def serialize_book(book: models.Book):
     options = [
         {
@@ -609,6 +621,28 @@ def serialize_support_thread(thread: models.SupportThread, include_user: bool = 
             "username": thread.user.username if thread.user else "",
         }
     return payload
+
+
+def cleanup_order_upload_files(order: models.Order, db: Session):
+    deleted_files = 0
+    for item in order.items:
+        if not item.stored_filename:
+            continue
+
+        file_path = UPLOAD_DIR / item.stored_filename
+        if file_path.exists():
+            try:
+                file_path.unlink()
+                deleted_files += 1
+            except OSError:
+                logger.warning("failed to delete uploaded file path=%s order_id=%s", file_path, order.id)
+
+        item.stored_filename = None
+        if item.upload:
+            item.upload.stored_filename = None
+            item.upload.file_path = None
+
+    return deleted_files
 
 # -----------------------------
 # ROOT
@@ -883,18 +917,22 @@ def delete_book_option_admin(
 
 
 @app.get("/pricing/pdf")
-def get_pdf_quote(total_pages: int, copies: int, mode: str, print_type: str, db: Session = Depends(get_db)):
+def get_pdf_quote(
+    total_pages: int,
+    copies: int = 1,
+    mode: str | None = None,
+    print_type: str | None = None,
+    db: Session = Depends(get_db),
+):
     if total_pages <= 0 or copies <= 0:
         raise HTTPException(status_code=400, detail="Pages and copies must be positive")
 
-    validate_mode_or_raise(mode)
-    validate_print_type_or_raise(print_type)
-    rule = get_pdf_pricing_rule(db, mode, print_type)
-    total_price = total_pages * copies * rule.price_per_page
+    total_price = calculate_pdf_total(total_pages, copies)
     return {
-        "mode": rule.mode,
-        "print_type": rule.print_type,
-        "price_per_page": rule.price_per_page,
+        "mode": None,
+        "print_type": None,
+        "price_per_page": PDF_PRICE_PER_PAGE,
+        "base_charge": PDF_BASE_CHARGE,
         "total_pages": total_pages,
         "copies": copies,
         "total_price": total_price,
@@ -905,8 +943,8 @@ def get_pdf_quote(total_pages: int, copies: int, mode: str, print_type: str, db:
 async def upload_pdf(
     file: UploadFile = File(...),
     total_pages: int = Form(...),
-    mode: str = Form(...),
-    print_type: str = Form(...),
+    mode: str | None = Form(None),
+    print_type: str | None = Form(None),
     copies: int | None = Form(None),
     quantity: int | None = Form(None),
     db: Session = Depends(get_db),
@@ -924,24 +962,21 @@ async def upload_pdf(
     if file_size > 10 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="PDF must be smaller than 10 MB")
 
-    validate_mode_or_raise(mode)
-    validate_print_type_or_raise(print_type)
-    rule = get_pdf_pricing_rule(db, mode, print_type)
     extension = Path(file.filename or "document.pdf").suffix or ".pdf"
     stored_filename = f"{uuid.uuid4().hex}{extension}"
     destination = UPLOAD_DIR / stored_filename
     with destination.open("wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    total_price = total_pages * copies * rule.price_per_page
+    total_price = calculate_pdf_total(total_pages, copies)
     upload = models.Upload(
         user_id=current_user.id,
         file_path=f"app/uploads/{stored_filename}",
         stored_filename=stored_filename,
         original_filename=file.filename,
         total_pages=total_pages,
-        mode=normalize_mode(mode),
-        print_type=normalize_print_type(print_type),
+        mode=None,
+        print_type=None,
         copies=copies,
         calculated_price=total_price,
     )
@@ -975,8 +1010,6 @@ def add_to_cart(
         if not payload.book_id or not payload.print_type:
             raise HTTPException(status_code=400, detail="Book items require book and print type")
 
-        if payload.mode:
-            validate_mode_or_raise(payload.mode)
         validate_print_type_or_raise(payload.print_type)
         book = db.query(models.Book).filter(models.Book.id == payload.book_id).first()
         if not book:
@@ -990,7 +1023,7 @@ def add_to_cart(
                 models.CartItem.user_id == current_user.id,
                 models.CartItem.item_type == "book",
                 models.CartItem.book_id == payload.book_id,
-                models.CartItem.mode == option.mode,
+                models.CartItem.mode == normalize_book_mode(option.mode),
                 models.CartItem.print_type == option.print_type,
             )
             .first()
@@ -1007,7 +1040,7 @@ def add_to_cart(
                 item_type="book",
                 reference_id=payload.book_id,
                 book_id=payload.book_id,
-                mode=option.mode,
+                mode=normalize_book_mode(option.mode),
                 print_type=option.print_type,
                 item_name=book.name,
                 quantity=payload.quantity,
@@ -1031,16 +1064,9 @@ def add_to_cart(
 
         if payload.total_pages and upload.total_pages != payload.total_pages:
             upload.total_pages = payload.total_pages
-        if payload.mode:
-            validate_mode_or_raise(payload.mode)
-            upload.mode = normalize_mode(payload.mode)
-        if payload.print_type:
-            validate_print_type_or_raise(payload.print_type)
-            upload.print_type = normalize_print_type(payload.print_type)
         if payload.quantity:
             upload.copies = payload.quantity
-            rule = get_pdf_pricing_rule(db, upload.mode or payload.mode, upload.print_type or payload.print_type)
-            upload.calculated_price = upload.total_pages * upload.copies * rule.price_per_page
+            upload.calculated_price = calculate_pdf_total(upload.total_pages, upload.copies)
 
         line_total = upload.calculated_price
         unit_price = line_total / max(upload.copies, 1)
@@ -1487,14 +1513,28 @@ def update_order_status(
     if status not in VALID_ORDER_STATUSES:
         raise HTTPException(status_code=400, detail="Invalid order status")
 
-    order = db.query(models.Order).filter(models.Order.id == order_id).first()
+    order = (
+        db.query(models.Order)
+        .options(joinedload(models.Order.items).joinedload(models.OrderItem.upload))
+        .filter(models.Order.id == order_id)
+        .first()
+    )
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
 
     order.status = status
+    deleted_files = 0
+    if status == "delivered":
+        deleted_files = cleanup_order_upload_files(order, db)
     db.commit()
-    logger.info("admin updated order status admin_id=%s order_id=%s status=%s", current_user.id, order_id, status)
-    return {"message": "Order status updated"}
+    logger.info(
+        "admin updated order status admin_id=%s order_id=%s status=%s deleted_files=%s",
+        current_user.id,
+        order_id,
+        status,
+        deleted_files,
+    )
+    return {"message": "Order status updated", "deleted_files": deleted_files}
 
 
 @app.put("/admin/update-order-status/{order_id}")

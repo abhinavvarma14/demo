@@ -152,6 +152,7 @@ function BookCard({ book }) {
               <PrintTypeToggle
                 value={selectedMode}
                 onChange={setSelectedMode}
+                options={modeOptions}
                 disabled={!selectedOption || modeOptions.length === 0}
               />
             </div>

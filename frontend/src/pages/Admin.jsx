@@ -108,9 +108,13 @@ function Admin({ defaultSection = "orders" }) {
     try {
       setActionLoading(`${id}-${status}`)
 
-      await API.put(`/admin/orders/${id}/status?status=${status}`)
+      const res = await API.put(`/admin/orders/${id}/status?status=${status}`)
 
-      toast.success("Order updated")
+      if (status === "delivered" && res.data.deleted_files > 0) {
+        toast.success("Order updated and uploaded file removed")
+      } else {
+        toast.success("Order updated")
+      }
 
       await refreshAdminData()
 
@@ -581,7 +585,7 @@ function Admin({ defaultSection = "orders" }) {
               <input
                 value={newOption.mode}
                 onChange={(event) => setNewOption((current) => ({ ...current, mode: event.target.value }))}
-                placeholder="Mode (optional)"
+                placeholder="Mode (optional, e.g. A or R)"
                 className="bg-white/5 border border-white/10 rounded-xl p-3"
               />
 

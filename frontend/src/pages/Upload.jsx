@@ -13,8 +13,6 @@ function Upload() {
   const [previewUrl, setPreviewUrl] = useState("")
   const [pages, setPages] = useState(0)
   const [copies, setCopies] = useState(1)
-  const [mode, setMode] = useState("black_white")
-  const [printType, setPrintType] = useState("single")
   const [price, setPrice] = useState(0)
   const [loadingPrice, setLoadingPrice] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -71,8 +69,6 @@ function Upload() {
           params: {
             total_pages: pages,
             copies,
-            mode,
-            print_type: printType,
           },
         })
         setPrice(res.data.total_price)
@@ -85,7 +81,7 @@ function Upload() {
     }
 
     fetchPrice()
-  }, [copies, file, mode, pages, printType])
+  }, [copies, file, pages])
 
   const addToCart = async () => {
     if (!isLoggedIn()) {
@@ -105,8 +101,6 @@ function Upload() {
       const formData = new FormData()
       formData.append("file", file)
       formData.append("total_pages", String(pages))
-      formData.append("mode", mode)
-      formData.append("print_type", printType)
       formData.append("quantity", String(copies))
 
       const uploadRes = await API.post("/uploads/pdf", formData)
@@ -116,8 +110,6 @@ function Upload() {
         upload_id: uploadRes.data.id,
         stored_filename: uploadRes.data.stored_filename,
         total_pages: uploadRes.data.total_pages,
-        mode: uploadRes.data.mode,
-        print_type: uploadRes.data.print_type,
         quantity: uploadRes.data.quantity,
       })
 
@@ -177,44 +169,6 @@ function Upload() {
         </p>
       )}
 
-      <div className="mt-6">
-        <p className="text-gray-400 mb-2">
-          Mode
-        </p>
-
-        <select
-          value={mode}
-          onChange={(e) => setMode(e.target.value)}
-          className="w-full bg-white/5 border border-white/10 rounded-xl p-3"
-        >
-          <option value="black_white">
-            Black & White
-          </option>
-          <option value="color">
-            Color
-          </option>
-        </select>
-      </div>
-
-      <div className="mt-4">
-        <p className="text-gray-400 mb-2">
-          Print Type
-        </p>
-
-        <select
-          value={printType}
-          onChange={(e) => setPrintType(e.target.value)}
-          className="w-full bg-white/5 border border-white/10 rounded-xl p-3"
-        >
-          <option value="single">
-            Single Side
-          </option>
-          <option value="double">
-            Double Side
-          </option>
-        </select>
-      </div>
-
       <div className="mt-4">
         <p className="text-gray-400 mb-2">
           Copies
@@ -237,6 +191,12 @@ function Upload() {
         <p className="text-2xl font-bold text-yellow-400">
           {loadingPrice ? "Calculating..." : `₹${price}`}
         </p>
+
+        {pages > 0 && (
+          <p className="mt-2 text-xs text-white/45">
+            Formula: ({pages} × {copies} × 1.25) + 60
+          </p>
+        )}
       </div>
 
       <button
