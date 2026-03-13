@@ -11,7 +11,9 @@ API.interceptors.request.use((config) => {
   const url = typeof config.url === "string" ? config.url : ""
   const isAuthRequest =
     url === "/login" ||
+    url === "/auth/login" ||
     url === "/signup" ||
+    url === "/auth/signup" ||
     url.endsWith("/login") ||
     url.endsWith("/signup")
 

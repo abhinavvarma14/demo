@@ -94,7 +94,7 @@ try {
     return
   }
 
-  await API.post("/signup", {
+  await API.post("/auth/signup", {
     username: normalizedUsername,
     password
   })
@@ -134,6 +134,7 @@ return (
 
     <input
       placeholder="Username"
+      autoComplete="username"
       value={username}
       onChange={(e) => {
         setUsername(e.target.value)
@@ -159,6 +160,7 @@ return (
     <input
       type="password"
       placeholder="Password"
+      autoComplete="new-password"
       value={password}
       onChange={(e) => {
         setPassword(e.target.value)
@@ -223,6 +225,7 @@ return (
     <input
       type="password"
       placeholder="Confirm Password"
+      autoComplete="new-password"
       value={confirmPassword}
       onChange={(e) => {
         setConfirmPassword(e.target.value)

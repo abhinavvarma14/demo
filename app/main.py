@@ -64,7 +64,7 @@ CORS_ORIGINS = [
 UPLOAD_DIR = Path("app/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
 
@@ -559,6 +559,11 @@ def signup(user: schemas.UserCreate, db: Session = Depends(get_db)):
     logger.info("signup success username=%s", username)
     return {"message": "User created"}
 
+
+@app.post("/auth/signup")
+def signup_alias(user: schemas.UserCreate, db: Session = Depends(get_db)):
+    return signup(user=user, db=db)
+
 @app.post("/login")
 def login(
     request: Request,
@@ -600,6 +605,15 @@ def login(
     )
     logger.info("login success username=%s role=%s client=%s", db_user.username, db_user.role, request.client.host if request.client else "unknown")
     return {"access_token": token, "token_type": "bearer"}
+
+
+@app.post("/auth/login")
+def login_alias(
+    request: Request,
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db),
+):
+    return login(request=request, form_data=form_data, db=db)
 
 
 @app.get("/me")

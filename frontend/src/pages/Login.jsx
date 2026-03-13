@@ -34,7 +34,7 @@ try {
   params.append("username", normalizedUsername)
   params.append("password", password)
 
-  const res = await API.post("/login", params, {
+  const res = await API.post("/auth/login", params, {
     headers: {
       "Content-Type": "application/x-www-form-urlencoded"
     }
@@ -84,6 +84,7 @@ return (
 
     <input
       placeholder="Username"
+      autoComplete="username"
       value={username}
       onChange={(e) => {
         setUsername(e.target.value)
@@ -95,6 +96,7 @@ return (
     <input
       type="password"
       placeholder="Password"
+      autoComplete="current-password"
       value={password}
       onChange={(e) => {
         setPassword(e.target.value)
