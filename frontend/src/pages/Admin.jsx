@@ -348,7 +348,6 @@ function Admin({ defaultSection = "orders" }) {
     }
   }
 
-  const paidOrders = orders.filter((order) => order.status !== "pending")
   const bulkCopies = printSummary.reduce((sum, item) => sum + item.quantity, 0)
 
   const goToSection = (section) => {
@@ -740,13 +739,13 @@ function Admin({ defaultSection = "orders" }) {
 
       {!loading && activeSection === "orders" && (
         <>
-          {paidOrders.length === 0 && (
+          {orders.length === 0 && (
             <p className="text-gray-400">
-              No paid orders yet
+              No orders yet
             </p>
           )}
 
-          {paidOrders.map((order) => (
+          {orders.map((order) => (
             <div
               key={order.id}
               className="bg-white/5 border border-white/10 rounded-xl p-4 mb-4"

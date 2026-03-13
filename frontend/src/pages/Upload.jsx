@@ -7,6 +7,11 @@ import toast from "react-hot-toast"
 import { isLoggedIn } from "../utils/auth"
 import { getApiErrorMessage } from "../utils/apiError"
 
+pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+  "pdfjs-dist/build/pdf.worker.min.mjs",
+  import.meta.url
+).toString()
+
 function Upload() {
   const navigate = useNavigate()
   const [file, setFile] = useState(null)
@@ -30,23 +35,31 @@ function Upload() {
       setPages(0)
       const reader = new FileReader()
       reader.onload = async function () {
-        const typedarray = new Uint8Array(this.result)
-        const pdf = await pdfjsLib.getDocument(typedarray).promise
-        setPages(pdf.numPages)
+        try {
+          const typedarray = new Uint8Array(this.result)
+          const pdf = await pdfjsLib.getDocument({ data: typedarray }).promise
+          setPages(pdf.numPages)
 
-        const firstPage = await pdf.getPage(1)
-        const viewport = firstPage.getViewport({ scale: 1 })
-        const canvas = document.createElement("canvas")
-        const context = canvas.getContext("2d")
-        canvas.width = viewport.width
-        canvas.height = viewport.height
+          const firstPage = await pdf.getPage(1)
+          const viewport = firstPage.getViewport({ scale: 1 })
+          const canvas = document.createElement("canvas")
+          const context = canvas.getContext("2d")
+          canvas.width = viewport.width
+          canvas.height = viewport.height
 
-        await firstPage.render({
-          canvasContext: context,
-          viewport,
-        }).promise
+          await firstPage.render({
+            canvasContext: context,
+            viewport,
+          }).promise
 
-        setPreviewUrl(canvas.toDataURL("image/png"))
+          setPreviewUrl(canvas.toDataURL("image/png"))
+        } catch (pdfError) {
+          console.log(pdfError)
+          setFile(null)
+          setPages(0)
+          setPreviewUrl("")
+          toast.error("Unable to read this PDF")
+        }
       }
       reader.readAsArrayBuffer(selectedFile)
       toast.success("PDF selected")
