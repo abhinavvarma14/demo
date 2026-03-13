@@ -748,29 +748,34 @@ function Admin({ defaultSection = "orders" }) {
           {orders.map((order) => (
             <div
               key={order.id}
-              className="bg-white/5 border border-white/10 rounded-xl p-4 mb-4"
+              className={`rounded-xl border p-4 mb-4 transition ${
+                order.status === "delivered"
+                  ? "bg-white/5 border-green-500/30 opacity-75"
+                  : "bg-white/5 border-white/10"
+              }`}
             >
-              <p className="text-gray-300">
-                Order ID: {order.id}
-              </p>
+              <div className={order.status === "delivered" ? "line-through decoration-green-500/70" : ""}>
+                <p className="text-gray-300">
+                  Order ID: {order.id}
+                </p>
 
-              <p className="text-gray-300">
-                Amount: ₹{order.total_amount}
-              </p>
+                <p className="text-gray-300">
+                  Amount: ₹{order.total_amount}
+                </p>
 
-              <p className="text-gray-300">
-                Status: {order.status}
-              </p>
+                <p className="text-gray-300">
+                  Status: {order.status}
+                </p>
 
-              <p className="text-gray-400 text-sm">
-                Contact: {order.contact_number}
-              </p>
+                <p className="text-gray-400 text-sm">
+                  Contact: {order.contact_number}
+                </p>
 
-              <p className="text-gray-400 text-sm">
-                User: {order.user?.username}
-              </p>
+                <p className="text-gray-400 text-sm">
+                  User: {order.user?.username}
+                </p>
 
-              <div className="mt-3 space-y-2">
+                <div className="mt-3 space-y-2">
                 {(order.items || []).map((item) => (
                   <div key={item.id} className="border-t border-white/5 pt-2">
                     <p className="text-gray-300 text-sm">
@@ -803,12 +808,13 @@ function Admin({ defaultSection = "orders" }) {
                     )}
                   </div>
                 ))}
+                </div>
               </div>
 
               <div className="flex gap-2 mt-4">
                 <button
                   onClick={() => updateStatus(order.id, "printing")}
-                  disabled={actionLoading === `${order.id}-printing`}
+                  disabled={actionLoading === `${order.id}-printing` || order.status === "delivered"}
                   className="bg-yellow-400 text-black px-3 py-1 rounded"
                 >
                   {actionLoading === `${order.id}-printing` ? "Processing..." : "Printing"}
@@ -816,7 +822,7 @@ function Admin({ defaultSection = "orders" }) {
 
                 <button
                   onClick={() => updateStatus(order.id, "ready")}
-                  disabled={actionLoading === `${order.id}-ready`}
+                  disabled={actionLoading === `${order.id}-ready` || order.status === "delivered"}
                   className="bg-green-500 text-black px-3 py-1 rounded"
                 >
                   {actionLoading === `${order.id}-ready` ? "Processing..." : "Ready"}
@@ -824,10 +830,14 @@ function Admin({ defaultSection = "orders" }) {
 
                 <button
                   onClick={() => updateStatus(order.id, "delivered")}
-                  disabled={actionLoading === `${order.id}-delivered`}
+                  disabled={actionLoading === `${order.id}-delivered` || order.status === "delivered"}
                   className="bg-blue-500 text-black px-3 py-1 rounded"
                 >
-                  {actionLoading === `${order.id}-delivered` ? "Processing..." : "Delivered"}
+                  {order.status === "delivered"
+                    ? "Delivered"
+                    : actionLoading === `${order.id}-delivered`
+                      ? "Processing..."
+                      : "Delivered"}
                 </button>
               </div>
             </div>

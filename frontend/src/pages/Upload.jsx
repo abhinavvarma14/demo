@@ -1,3 +1,4 @@
+import { AnimatePresence, motion } from "framer-motion"
 import { useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { useDropzone } from "react-dropzone"
@@ -18,6 +19,8 @@ function Upload() {
   const [previewUrl, setPreviewUrl] = useState("")
   const [pages, setPages] = useState(0)
   const [submitting, setSubmitting] = useState(false)
+  const [printType, setPrintType] = useState("single")
+  const [uploadedState, setUploadedState] = useState(false)
   const price = useMemo(() => {
     if (!file || pages <= 0) {
       return 0
@@ -33,6 +36,7 @@ function Upload() {
       setFile(selectedFile)
       setPreviewUrl("")
       setPages(0)
+      setUploadedState(false)
       const reader = new FileReader()
       reader.onload = async function () {
         try {
@@ -53,11 +57,13 @@ function Upload() {
           }).promise
 
           setPreviewUrl(canvas.toDataURL("image/png"))
+          setUploadedState(true)
         } catch (pdfError) {
           console.log(pdfError)
           setFile(null)
           setPages(0)
           setPreviewUrl("")
+          setUploadedState(false)
           toast.error("Unable to read this PDF")
         }
       }
@@ -93,6 +99,7 @@ function Upload() {
       formData.append("file", file)
       formData.append("total_pages", String(pages))
       formData.append("quantity", "1")
+      formData.append("print_type", printType)
 
       const uploadRes = await API.post("/api/uploads/pdf", formData)
 
@@ -101,6 +108,7 @@ function Upload() {
         upload_id: uploadRes.data.id,
         stored_filename: uploadRes.data.stored_filename,
         total_pages: uploadRes.data.total_pages,
+        print_type: printType,
         quantity: 1,
       })
 
@@ -136,9 +144,30 @@ function Upload() {
       </div>
 
       {file && (
-        <p className="mt-3 text-gray-400 text-sm">
-          Selected: {file.name}
-        </p>
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={uploadedState ? "uploaded" : "selected"}
+            initial={{ opacity: 0, y: 8, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -6, scale: 0.98 }}
+            className={`mt-3 rounded-2xl px-4 py-3 text-sm ${
+              uploadedState
+                ? "bg-yellow-400/10 text-yellow-300"
+                : "bg-white/5 text-gray-300"
+            }`}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <span className="truncate">
+                {file.name}
+              </span>
+              <span className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                uploadedState ? "bg-yellow-400 text-black" : "bg-white/10 text-white/60"
+              }`}>
+                {uploadedState ? "Uploaded" : "Preparing"}
+              </span>
+            </div>
+          </motion.div>
+        </AnimatePresence>
       )}
 
       {previewUrl && (
@@ -160,6 +189,38 @@ function Upload() {
         </p>
       )}
 
+      <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-4">
+        <p className="text-sm text-gray-400">
+          Print Side
+        </p>
+
+        <div className="mt-3 grid grid-cols-2 gap-3">
+          <button
+            onClick={() => setPrintType("single")}
+            type="button"
+            className={`rounded-xl px-4 py-3 text-sm font-semibold transition ${
+              printType === "single"
+                ? "bg-yellow-400 text-black"
+                : "bg-white/5 text-white border border-white/10"
+            }`}
+          >
+            Single Side
+          </button>
+
+          <button
+            onClick={() => setPrintType("double")}
+            type="button"
+            className={`rounded-xl px-4 py-3 text-sm font-semibold transition ${
+              printType === "double"
+                ? "bg-yellow-400 text-black"
+                : "bg-white/5 text-white border border-white/10"
+            }`}
+          >
+            Double Side
+          </button>
+        </div>
+      </div>
+
       <div className="mt-6 bg-white/5 border border-white/10 rounded-2xl p-4">
         <p className="text-gray-400 text-sm">
           Total Price
@@ -168,12 +229,6 @@ function Upload() {
         <p className="text-2xl font-bold text-yellow-400">
           ₹{price.toFixed(2)}
         </p>
-
-        {pages > 0 && (
-          <p className="mt-2 text-xs text-white/45">
-            Formula: ({pages} × 1.25) + 65
-          </p>
-        )}
       </div>
 
       <button

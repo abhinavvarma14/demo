@@ -134,7 +134,7 @@ function ProfilePage() {
               }`}
             >
               <p className="text-sm font-semibold">Help</p>
-              <p className="mt-1 text-xs text-white/60">Send problems to admin</p>
+              <p className="mt-1 text-xs text-white/60">Drop your issue here</p>
             </button>
           </div>
         </div>
@@ -237,12 +237,14 @@ function ProfilePage() {
             </div>
 
             <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
-              <p className="text-sm text-white/60">Describe your problem</p>
+              <p className="text-sm text-white/60">
+                Drop your issue. Also include your contact info for solving the issue betterly.
+              </p>
               <textarea
                 value={supportMessage}
                 onChange={(event) => setSupportMessage(event.target.value)}
                 rows={4}
-                placeholder="Write your issue here..."
+                placeholder="Drop your issue here... Also include your contact info."
                 className="mt-3 w-full rounded-2xl border border-white/10 bg-black/20 p-3 text-sm text-white outline-none"
               />
               <button
@@ -250,7 +252,7 @@ function ProfilePage() {
                 disabled={submittingSupport === "new-thread"}
                 className="mt-3 rounded-xl bg-yellow-400 px-4 py-2 font-semibold text-black"
               >
-                {submittingSupport === "new-thread" ? "Sending..." : "Send Query"}
+                {submittingSupport === "new-thread" ? "Sending..." : "Drop Issue"}
               </button>
             </div>
 
@@ -297,7 +299,7 @@ function ProfilePage() {
                       }))
                     }
                     rows={3}
-                    placeholder="Add more details..."
+                    placeholder="Add more details or contact info..."
                     className="w-full rounded-2xl border border-white/10 bg-black/20 p-3 text-sm text-white outline-none"
                   />
                   <button

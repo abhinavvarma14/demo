@@ -987,6 +987,7 @@ async def upload_pdf(
     copies = 1
     if total_pages <= 0 or copies <= 0:
         raise HTTPException(status_code=400, detail="Pages and copies must be positive")
+    normalized_print_type = validate_print_type_or_raise(print_type or "single")
     if file.content_type != "application/pdf" and not (file.filename or "").lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are allowed")
 
@@ -1010,7 +1011,7 @@ async def upload_pdf(
         original_filename=file.filename,
         total_pages=total_pages,
         mode=None,
-        print_type=None,
+        print_type=normalized_print_type,
         copies=copies,
         calculated_price=total_price,
     )
@@ -1101,6 +1102,8 @@ def add_to_cart(
         if payload.quantity:
             upload.copies = 1
             upload.calculated_price = calculate_pdf_total(upload.total_pages)
+        if payload.print_type:
+            upload.print_type = validate_print_type_or_raise(payload.print_type)
 
         line_total = upload.calculated_price
         unit_price = line_total / max(upload.copies, 1)
