@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { AnimatePresence, motion } from "framer-motion"
 import { useNavigate } from "react-router-dom"
 import API from "../api/api"
 import toast from "react-hot-toast"
@@ -12,6 +13,7 @@ const navigate = useNavigate()
 const [username, setUsername] = useState("")
 const [password, setPassword] = useState("")
 const [submitting, setSubmitting] = useState(false)
+const [formError, setFormError] = useState("")
 
 const handleLogin = async (e) => {
 
@@ -19,10 +21,11 @@ e.preventDefault()
 
 try {
   setSubmitting(true)
+  setFormError("")
   const normalizedUsername = username.trim()
 
   if (!normalizedUsername || !password) {
-    toast.error("Username and password are required")
+    setFormError("Username and password are required.")
     return
   }
 
@@ -50,10 +53,14 @@ try {
 } catch (error) {
 
   console.log(error)
-  if (error.response?.status === 429) {
-    toast.error("Too many login attempts. Try again later.")
+  if (error.response?.status === 404) {
+    setFormError("No user found. Please sign up.")
+  } else if (error.response?.status === 401) {
+    setFormError("Incorrect password.")
+  } else if (error.response?.status === 429) {
+    setFormError("Too many login attempts. Try again later.")
   } else {
-    toast.error(getApiErrorMessage(error, "Login failed"))
+    setFormError(getApiErrorMessage(error, "Login failed"))
   }
 
 } finally {
@@ -78,7 +85,10 @@ return (
     <input
       placeholder="Username"
       value={username}
-      onChange={(e) => setUsername(e.target.value)}
+      onChange={(e) => {
+        setUsername(e.target.value)
+        setFormError("")
+      }}
       className="w-full bg-white/5 border border-white/10 rounded-xl p-3 mb-4"
     />
 
@@ -86,14 +96,31 @@ return (
       type="password"
       placeholder="Password"
       value={password}
-      onChange={(e) => setPassword(e.target.value)}
-      className="w-full bg-white/5 border border-white/10 rounded-xl p-3 mb-6"
+      onChange={(e) => {
+        setPassword(e.target.value)
+        setFormError("")
+      }}
+      className="w-full bg-white/5 border border-white/10 rounded-xl p-3"
     />
+
+    <AnimatePresence mode="wait">
+      {formError && (
+        <motion.p
+          key={formError}
+          initial={{ opacity: 0, y: -6 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -6 }}
+          className="text-red-500 text-sm mt-2"
+        >
+          {formError}
+        </motion.p>
+      )}
+    </AnimatePresence>
 
     <button
       type="submit"
       disabled={submitting}
-      className="w-full bg-yellow-400 text-black py-3 rounded-xl font-semibold hover:bg-yellow-300 transition"
+      className="w-full bg-yellow-400 text-black py-3 rounded-xl font-semibold hover:bg-yellow-300 transition mt-6 disabled:opacity-60 disabled:cursor-not-allowed"
     >
       {submitting ? "Processing..." : "Login"}
     </button>

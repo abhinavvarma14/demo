@@ -550,7 +550,7 @@ def signup(user: schemas.UserCreate, db: Session = Depends(get_db)):
     username = sanitize_username(user.username)
     existing_user = db.query(models.User).filter(models.User.username == username).first()
     if existing_user:
-        raise HTTPException(status_code=400, detail="Username already exists")
+        raise HTTPException(status_code=409, detail="Username already exists")
 
     db.add(models.User(username=username, password_hash=hash_password(user.password)))
     db.commit()
@@ -575,7 +575,7 @@ def login(
     if not db_user:
         record_failed_login(login_key)
         logger.warning("login failed unknown username=%s client=%s", username, request.client.host if request.client else "unknown")
-        raise HTTPException(status_code=401, detail="User not found")
+        raise HTTPException(status_code=404, detail="User not found")
     if not verify_password(form_data.password, db_user.password_hash):
         record_failed_login(login_key)
         logger.warning("login failed bad password username=%s client=%s", username, request.client.host if request.client else "unknown")

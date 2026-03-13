@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { AnimatePresence, motion } from "framer-motion"
 import { useNavigate } from "react-router-dom"
 import API from "../api/api"
 import toast from "react-hot-toast"
@@ -12,14 +13,17 @@ const [username, setUsername] = useState("")
 const [password, setPassword] = useState("")
 const [confirmPassword, setConfirmPassword] = useState("")
 const [submitting, setSubmitting] = useState(false)
+const [usernameError, setUsernameError] = useState("")
+const [formError, setFormError] = useState("")
 
 const handleSignup = async (e) => {
 
 e.preventDefault()
+setUsernameError("")
+setFormError("")
 
 if (password !== confirmPassword) {
-
-  toast.error("Passwords do not match")
+  setFormError("Passwords do not match.")
 
   return
 
@@ -27,9 +31,15 @@ if (password !== confirmPassword) {
 
 try {
   setSubmitting(true)
+  const normalizedUsername = username.trim()
+
+  if (!normalizedUsername || !password) {
+    setFormError("Username and password are required.")
+    return
+  }
 
   await API.post("/signup", {
-    username,
+    username: normalizedUsername,
     password
   })
 
@@ -41,10 +51,10 @@ try {
 
   console.log(error)
 
-  if (error.response?.data?.detail === "Username already exists") {
-    toast.error("Username already exists")
+  if (error.response?.status === 409) {
+    setUsernameError("Username already exists. Please choose another.")
   } else {
-    toast.error(getApiErrorMessage(error, "Signup failed"))
+    setFormError(getApiErrorMessage(error, "Signup failed"))
   }
 
 } finally {
@@ -69,15 +79,35 @@ return (
     <input
       placeholder="Username"
       value={username}
-      onChange={(e) => setUsername(e.target.value)}
-      className="w-full bg-white/5 border border-white/10 rounded-xl p-3 mb-4"
+      onChange={(e) => {
+        setUsername(e.target.value)
+        setUsernameError("")
+      }}
+      className="w-full bg-white/5 border border-white/10 rounded-xl p-3"
     />
+
+    <AnimatePresence mode="wait">
+      {usernameError && (
+        <motion.p
+          key={usernameError}
+          initial={{ opacity: 0, y: -6 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -6 }}
+          className="text-red-500 text-sm mt-2"
+        >
+          {usernameError}
+        </motion.p>
+      )}
+    </AnimatePresence>
 
     <input
       type="password"
       placeholder="Password"
       value={password}
-      onChange={(e) => setPassword(e.target.value)}
+      onChange={(e) => {
+        setPassword(e.target.value)
+        setFormError("")
+      }}
       className="w-full bg-white/5 border border-white/10 rounded-xl p-3 mb-4"
     />
 
@@ -85,14 +115,31 @@ return (
       type="password"
       placeholder="Confirm Password"
       value={confirmPassword}
-      onChange={(e) => setConfirmPassword(e.target.value)}
-      className="w-full bg-white/5 border border-white/10 rounded-xl p-3 mb-6"
+      onChange={(e) => {
+        setConfirmPassword(e.target.value)
+        setFormError("")
+      }}
+      className="w-full bg-white/5 border border-white/10 rounded-xl p-3"
     />
+
+    <AnimatePresence mode="wait">
+      {formError && (
+        <motion.p
+          key={formError}
+          initial={{ opacity: 0, y: -6 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -6 }}
+          className="text-red-500 text-sm mt-2"
+        >
+          {formError}
+        </motion.p>
+      )}
+    </AnimatePresence>
 
     <button
       type="submit"
       disabled={submitting}
-      className="w-full bg-yellow-400 text-black py-3 rounded-xl font-semibold hover:bg-yellow-300 transition"
+      className="w-full bg-yellow-400 text-black py-3 rounded-xl font-semibold hover:bg-yellow-300 transition mt-6 disabled:opacity-60 disabled:cursor-not-allowed"
     >
       {submitting ? "Processing..." : "Create Account"}
     </button>

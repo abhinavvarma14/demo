@@ -87,7 +87,7 @@ def test_signup_rejects_duplicate_username(client):
     second = signup(client)
 
     assert first.status_code == 200
-    assert second.status_code == 400
+    assert second.status_code == 409
     assert second.json()["detail"] == "Username already exists"
 
 
@@ -109,7 +109,7 @@ def test_invalid_token_returns_401(client):
 def test_login_returns_user_not_found_for_missing_user(client):
     response = login(client, username="missing-user")
 
-    assert response.status_code == 401
+    assert response.status_code == 404
     assert response.json()["detail"] == "User not found"
 
 
