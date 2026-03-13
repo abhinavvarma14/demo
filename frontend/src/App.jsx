@@ -10,6 +10,7 @@ import Upload from "./pages/Upload"
 import Cart from "./pages/Cart"
 import Checkout from "./pages/Checkout"
 import Login from "./pages/Login"
+import ProtectedRoute from "./components/ProtectedRoute"
 
 
 function App() {
@@ -30,16 +31,51 @@ function App() {
         <Route path="/" element={<Home />} />
 <Route path="/signup" element={<Signup />} />
         <Route path="/upload" element={<Upload />} />
-<Route path="/profile" element={<Profile />} />
-        <Route path="/cart" element={<Cart />} />
+<Route
+          path="/profile"
+          element={
+            <ProtectedRoute>
+              <Profile />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/cart"
+          element={
+            <ProtectedRoute>
+              <Cart />
+            </ProtectedRoute>
+          }
+        />
 
-        <Route path="/checkout" element={<Checkout />} />
+        <Route
+          path="/checkout"
+          element={
+            <ProtectedRoute>
+              <Checkout />
+            </ProtectedRoute>
+          }
+        />
 
         <Route path="/login" element={<Login />} />
 
-        <Route path="/admin" element={<Admin />} />
+        <Route
+          path="/admin"
+          element={
+            <ProtectedRoute role="admin">
+              <Admin />
+            </ProtectedRoute>
+          }
+        />
 
-        <Route path="/orders" element={<Orders />} />
+        <Route
+          path="/orders"
+          element={
+            <ProtectedRoute>
+              <Orders />
+            </ProtectedRoute>
+          }
+        />
 
       </Routes>
 

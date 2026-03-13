@@ -12,7 +12,7 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from sqlalchemy import inspect, text
+from sqlalchemy import func, inspect, text
 from sqlalchemy.orm import Session, joinedload
 
 load_dotenv()
@@ -108,6 +108,13 @@ def require_admin(current_user: models.User):
         raise HTTPException(status_code=403, detail="Admin only")
 
 
+def get_current_admin_user(
+    current_user: models.User = Depends(get_current_user),
+):
+    require_admin(current_user)
+    return current_user
+
+
 def normalize_mode(value: str | None):
     if not value:
         return None
@@ -165,6 +172,7 @@ def sync_schema():
             "print_type": "ALTER TABLE order_items ADD COLUMN print_type VARCHAR",
             "unit_price": "ALTER TABLE order_items ADD COLUMN unit_price FLOAT DEFAULT 0",
             "total_price": "ALTER TABLE order_items ADD COLUMN total_price FLOAT DEFAULT 0",
+            "printed": "ALTER TABLE order_items ADD COLUMN printed BOOLEAN DEFAULT FALSE",
         },
     }
 
@@ -346,6 +354,7 @@ def serialize_order_item(item: models.OrderItem):
         "quantity": item.quantity,
         "unit_price": item.unit_price,
         "total_price": item.total_price or item.calculated_price,
+        "printed": item.printed,
     }
 
 
@@ -394,7 +403,13 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
     if not pwd_context.verify(form_data.password, db_user.password):
         raise HTTPException(status_code=400, detail="Invalid password")
 
-    token = create_access_token(data={"sub": str(db_user.id)})
+    token = create_access_token(
+        data={
+            "sub": str(db_user.id),
+            "role": db_user.role,
+            "username": db_user.username,
+        }
+    )
     return {"access_token": token, "token_type": "bearer"}
 
 
@@ -883,11 +898,8 @@ def my_orders(
 @app.get("/admin/orders")
 def admin_orders(
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_admin_user),
 ):
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
-
     orders = (
         db.query(models.Order)
         .options(
@@ -906,11 +918,8 @@ def update_order_status(
     order_id: int,
     status: str,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_admin_user),
 ):
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
-
     order = db.query(models.Order).filter(models.Order.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -925,6 +934,70 @@ def update_order_status_legacy(
     order_id: int,
     status: str,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_admin_user),
 ):
     return update_order_status(order_id=order_id, status=status, db=db, current_user=current_user)
+
+
+@app.get("/admin/print-summary")
+def admin_print_summary(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    summary = (
+        db.query(
+            models.OrderItem.item_name.label("item_name"),
+            models.OrderItem.mode.label("mode"),
+            models.OrderItem.print_type.label("print_type"),
+            func.sum(models.OrderItem.quantity).label("quantity"),
+        )
+        .join(models.Order, models.Order.id == models.OrderItem.order_id)
+        .filter(
+            models.OrderItem.printed.is_(False),
+            models.Order.status.in_(["paid", "printing", "ready"]),
+        )
+        .group_by(
+            models.OrderItem.item_name,
+            models.OrderItem.mode,
+            models.OrderItem.print_type,
+        )
+        .order_by(models.OrderItem.item_name.asc())
+        .all()
+    )
+
+    return [
+        {
+            "item_name": row.item_name or "Unnamed item",
+            "mode": row.mode,
+            "print_type": row.print_type,
+            "quantity": int(row.quantity or 0),
+        }
+        for row in summary
+    ]
+
+
+@app.post("/admin/print-complete")
+def admin_print_complete(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    pending_item_ids = [
+        item_id
+        for (item_id,) in db.query(models.OrderItem.id)
+        .join(models.Order, models.Order.id == models.OrderItem.order_id)
+        .filter(
+            models.OrderItem.printed.is_(False),
+            models.Order.status.in_(["paid", "printing", "ready"]),
+        )
+        .all()
+    ]
+
+    updated_count = 0
+    if pending_item_ids:
+        updated_count = (
+            db.query(models.OrderItem)
+            .filter(models.OrderItem.id.in_(pending_item_ids))
+            .update({"printed": True}, synchronize_session=False)
+        )
+    db.commit()
+    return {"message": "Print queue marked completed", "updated_count": updated_count}

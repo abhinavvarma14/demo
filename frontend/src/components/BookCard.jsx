@@ -2,6 +2,7 @@ import { useState } from "react"
 import { useNavigate } from "react-router-dom"
 import API from "../api/api"
 import toast from "react-hot-toast"
+import { isLoggedIn } from "../utils/auth"
 
 function BookCard({ book }) {
   const navigate = useNavigate()
@@ -31,8 +32,8 @@ function BookCard({ book }) {
       return
     }
 
-    if (!localStorage.getItem("token")) {
-      toast.error("Please login first")
+    if (!isLoggedIn()) {
+      toast.error("Please login to add items to cart")
       navigate("/login")
       return
     }

@@ -135,6 +135,7 @@ class OrderItem(Base):
     unit_price = Column(Float, default=0)
     calculated_price = Column(Float, default=0)
     total_price = Column(Float, default=0)
+    printed = Column(Boolean, default=False)
 
     order = relationship("Order", back_populates="items")
     upload = relationship("Upload", back_populates="order_items")

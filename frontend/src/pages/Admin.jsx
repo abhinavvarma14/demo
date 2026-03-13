@@ -3,6 +3,7 @@ import API, { API_BASE_URL } from "../api/api"
 
 function Admin() {
   const [orders, setOrders] = useState([])
+  const [printSummary, setPrintSummary] = useState([])
   const [books, setBooks] = useState([])
   const [activeSection, setActiveSection] = useState("books")
   const [newBook, setNewBook] = useState({ name: "", year: "" })
@@ -38,9 +39,19 @@ function Admin() {
     }
   }
 
+  const fetchPrintSummary = async () => {
+    try {
+      const res = await API.get("/admin/print-summary")
+      setPrintSummary(res.data)
+    } catch (err) {
+      console.log(err)
+    }
+  }
+
   useEffect(() => {
     fetchOrders()
     fetchBooks()
+    fetchPrintSummary()
   }, [])
 
   const updateStatus = async (id, status) => {
@@ -52,6 +63,7 @@ function Admin() {
       alert("Order updated")
 
       fetchOrders()
+      fetchPrintSummary()
 
     } catch {
 
@@ -59,6 +71,17 @@ function Admin() {
 
     }
 
+  }
+
+  const markAllPrinted = async () => {
+    try {
+      await API.post("/admin/print-complete")
+      alert("Print summary reset")
+      fetchPrintSummary()
+    } catch (error) {
+      console.log(error)
+      alert("Failed to mark all printed")
+    }
   }
 
   const createBook = async () => {
@@ -182,6 +205,74 @@ function Admin() {
           <p className="text-2xl font-bold text-yellow-400 mt-1">
             {books.length}
           </p>
+        </div>
+
+        <div className="bg-white/5 border border-white/10 rounded-xl p-4 col-span-2">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-gray-400 text-sm">
+                Bulk Print Summary
+              </p>
+              <p className="text-2xl font-bold text-yellow-400 mt-1">
+                {printSummary.reduce((sum, item) => sum + item.quantity, 0)}
+              </p>
+            </div>
+
+            <button
+              onClick={markAllPrinted}
+              className="bg-yellow-400 text-black px-4 py-2 rounded-xl font-semibold"
+            >
+              Mark All Printed
+            </button>
+          </div>
+
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr className="text-gray-400">
+                  <th className="pb-2 font-normal">
+                    Book Name
+                  </th>
+                  <th className="pb-2 font-normal">
+                    Mode
+                  </th>
+                  <th className="pb-2 font-normal">
+                    Print Type
+                  </th>
+                  <th className="pb-2 font-normal">
+                    Total Copies
+                  </th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {printSummary.length === 0 && (
+                  <tr>
+                    <td colSpan="4" className="py-3 text-gray-500">
+                      No pending bulk print items
+                    </td>
+                  </tr>
+                )}
+
+                {printSummary.map((item) => (
+                  <tr key={`${item.item_name}-${item.mode}-${item.print_type}`} className="border-t border-white/5">
+                    <td className="py-3 text-gray-300">
+                      {item.item_name}
+                    </td>
+                    <td className="py-3 text-gray-400">
+                      {item.mode || "-"}
+                    </td>
+                    <td className="py-3 text-gray-400">
+                      {item.print_type === "single" ? "Single" : item.print_type === "double" ? "Double" : item.print_type || "-"}
+                    </td>
+                    <td className="py-3 text-yellow-400">
+                      {item.quantity}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 

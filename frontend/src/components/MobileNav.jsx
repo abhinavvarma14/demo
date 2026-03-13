@@ -1,5 +1,6 @@
 import { Home, ShoppingCart, User } from "lucide-react"
 import { useNavigate, useLocation } from "react-router-dom"
+import { isLoggedIn } from "../utils/auth"
 
 function MobileNav(){
 
@@ -10,13 +11,11 @@ if(location.pathname === "/admin"){
   return null
 }
 
-const token = localStorage.getItem("token")
-
 const active = (path) => location.pathname === path
 
 const handleProfileClick = () => {
 
-if(token){
+if(isLoggedIn()){
   navigate("/profile")
 }
 else{

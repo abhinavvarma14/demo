@@ -2,6 +2,7 @@ import { useState } from "react"
 import { useNavigate } from "react-router-dom"
 import API from "../api/api"
 import toast from "react-hot-toast"
+import { getUserRole } from "../utils/auth"
 
 function Login() {
 
@@ -31,7 +32,11 @@ try {
 
   toast.success("Login successful")
 
-  navigate("/")
+  if (getUserRole() === "admin") {
+    navigate("/admin")
+  } else {
+    navigate("/")
+  }
 
 } catch (err) {
 
