@@ -139,7 +139,7 @@ function BookCard({ book }) {
           </div>
         </div>
 
-        <div className="mt-4 space-y-3">
+        <div className="mt-4 grid grid-cols-2 gap-2">
           <div>
             <p className="mb-2 text-[11px] uppercase tracking-[0.28em] text-white/40">
               Side
@@ -164,7 +164,7 @@ function BookCard({ book }) {
         </div>
 
         {hasAdded && (
-          <div className="mt-4">
+          <div className="mt-3">
             <p className="mb-2 text-[11px] uppercase tracking-[0.28em] text-white/40">
               Copies
             </p>
@@ -177,7 +177,7 @@ function BookCard({ book }) {
           </div>
         )}
 
-        <div className="mt-4">
+        <div className="mt-3">
           <CartButton
             hasAdded={hasAdded}
             quantity={quantity}

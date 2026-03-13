@@ -125,18 +125,6 @@ return (
       {submitting ? "Processing..." : "Login"}
     </button>
 
-    <p className="text-center text-gray-400 text-sm mt-4">
-      Don't have an account?
-
-      <span
-        onClick={() => navigate("/signup")}
-        className="text-yellow-400 ml-2 cursor-pointer"
-      >
-        Signup
-      </span>
-
-    </p>
-
     <p className="text-center text-gray-400 text-sm mt-3">
       If you don't have an account, create one.
 

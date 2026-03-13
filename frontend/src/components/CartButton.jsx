@@ -28,7 +28,7 @@ function CartButton({ hasAdded, quantity, loading, onClick, pulseKey }) {
         onMouseMove={handleMove}
         onMouseLeave={() => setOffset({ x: 0, y: 0 })}
         disabled={loading}
-        className={`relative flex w-full items-center justify-center overflow-hidden rounded-2xl border px-4 py-3 text-sm font-semibold transition ${
+        className={`relative flex w-full items-center justify-center overflow-hidden rounded-2xl border px-3 py-2.5 text-xs font-semibold transition ${
           hasAdded
             ? "border-yellow-400/30 bg-gradient-to-r from-yellow-400 to-yellow-300 text-black shadow-[0_18px_36px_rgba(250,204,21,0.28)]"
             : "border-white/15 bg-white/10 text-white backdrop-blur-xl shadow-[0_18px_38px_rgba(0,0,0,0.22)]"

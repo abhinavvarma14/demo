@@ -125,7 +125,7 @@ return (
 
   <form
     onSubmit={handleSignup}
-    className="w-full max-w-sm bg-white/5 backdrop-blur-lg border border-white/10 rounded-2xl p-6"
+    className="w-full max-w-sm bg-white/5 backdrop-blur-lg border border-white/10 rounded-2xl p-5"
   >
 
     <h1 className="text-2xl text-yellow-400 font-bold mb-6 text-center">
@@ -167,7 +167,7 @@ return (
       className="w-full bg-white/5 border border-white/10 rounded-xl p-3"
     />
 
-    <div className="mt-3 rounded-2xl border border-white/10 bg-white/5 p-3">
+    <div className="mt-3 rounded-2xl border border-white/10 bg-white/5 p-2.5">
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="text-xs uppercase tracking-[0.28em] text-white/45">
@@ -181,14 +181,14 @@ return (
         <button
           type="button"
           onClick={generatePassword}
-          className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-2 text-xs font-semibold text-white/85"
+          className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-2.5 py-1.5 text-[11px] font-semibold text-white/85"
         >
           <Sparkles size={14} />
           Generate
         </button>
       </div>
 
-      <div className="mt-3 h-2 rounded-full bg-white/10">
+      <div className="mt-2.5 h-2 rounded-full bg-white/10">
         <motion.div
           animate={{ width: `${(requirements.score / 5) * 100}%` }}
           transition={{ type: "spring", stiffness: 240, damping: 22 }}
@@ -196,11 +196,11 @@ return (
         />
       </div>
 
-      <p className="mt-3 text-xs text-white/50">
+      <p className="mt-2 text-[11px] text-white/50">
         Use at least 8 characters with uppercase, lowercase, number, and symbol.
       </p>
 
-      <div className="mt-3 flex flex-wrap gap-2">
+      <div className="mt-2 flex flex-wrap gap-1.5">
         {[
           { label: "8+ chars", ok: requirements.hasLength },
           { label: "Uppercase", ok: requirements.hasUppercase },

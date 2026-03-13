@@ -11,6 +11,7 @@ function Home(){
   const navigate = useNavigate()
   const [books, setBooks] = useState([])
   const [search, setSearch] = useState("")
+  const [selectedYear, setSelectedYear] = useState("all")
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -29,9 +30,13 @@ function Home(){
     fetchBooks()
   }, [])
 
-  const filteredBooks = books.filter((book) =>
-    book.name.toLowerCase().includes(search.trim().toLowerCase())
-  )
+  const years = ["all", ...new Set(books.map((book) => (book.year || "").toLowerCase()).filter(Boolean))]
+
+  const filteredBooks = books.filter((book) => {
+    const matchesSearch = book.name.toLowerCase().includes(search.trim().toLowerCase())
+    const matchesYear = selectedYear === "all" || (book.year || "").toLowerCase() === selectedYear
+    return matchesSearch && matchesYear
+  })
 
   return(
 
@@ -42,6 +47,22 @@ function Home(){
           onChange={setSearch}
           placeholder="Search books, years, or editions"
         />
+      </div>
+
+      <div className="mb-4 flex gap-2 overflow-x-auto pb-1">
+        {years.map((year) => (
+          <button
+            key={year}
+            onClick={() => setSelectedYear(year)}
+            className={`whitespace-nowrap rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+              selectedYear === year
+                ? "border-yellow-400 bg-yellow-400 text-black"
+                : "border-white/10 bg-white/5 text-gray-300"
+            }`}
+          >
+            {year === "all" ? "All Years" : year.toUpperCase()}
+          </button>
+        ))}
       </div>
 
       {/* Books Grid */}
@@ -55,7 +76,7 @@ function Home(){
           </>
         )}
 
-        {!loading && books.length === 0 && (
+        {!loading && filteredBooks.length === 0 && (
           <div className="col-span-2 text-gray-400">
             No books available right now.
           </div>
