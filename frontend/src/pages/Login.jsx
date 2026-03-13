@@ -19,10 +19,16 @@ e.preventDefault()
 
 try {
   setSubmitting(true)
+  const normalizedUsername = username.trim()
+
+  if (!normalizedUsername || !password) {
+    toast.error("Username and password are required")
+    return
+  }
 
   const params = new URLSearchParams()
 
-  params.append("username", username)
+  params.append("username", normalizedUsername)
   params.append("password", password)
 
   const res = await API.post("/login", params, {
@@ -44,8 +50,11 @@ try {
 } catch (error) {
 
   console.log(error)
-
-  toast.error(getApiErrorMessage(error, "Login failed"))
+  if (error.response?.status === 429) {
+    toast.error("Too many login attempts. Try again later.")
+  } else {
+    toast.error(getApiErrorMessage(error, "Login failed"))
+  }
 
 } finally {
   setSubmitting(false)

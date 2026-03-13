@@ -3,6 +3,7 @@ import shutil
 import uuid
 import logging
 import base64
+import time
 from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -27,6 +28,9 @@ from .database import SessionLocal, engine
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("batprint")
+LOGIN_WINDOW_SECONDS = int(os.getenv("LOGIN_WINDOW_SECONDS", "300"))
+LOGIN_MAX_ATTEMPTS = int(os.getenv("LOGIN_MAX_ATTEMPTS", "5"))
+login_attempts: dict[str, list[float]] = {}
 
 def get_required_env(name: str) -> str:
     value = os.getenv(name)
@@ -71,6 +75,11 @@ models.Base.metadata.create_all(bind=engine)
 async def lifespan(_: FastAPI):
     models.Base.metadata.create_all(bind=engine)
     sync_schema()
+    db = SessionLocal()
+    try:
+        migrate_legacy_passwords(db)
+    finally:
+        db.close()
     seed_defaults()
     yield
 
@@ -99,6 +108,61 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def sanitize_username(value: str) -> str:
+    return value.strip()
+
+
+def hash_password(password: str) -> str:
+    return pwd_context.hash(password)
+
+
+def is_password_hashed(password_value: str | None) -> bool:
+    return bool(password_value) and pwd_context.identify(password_value) is not None
+
+
+def verify_password(plain_password: str, stored_password_hash: str | None) -> bool:
+    if not stored_password_hash:
+        return False
+    if is_password_hashed(stored_password_hash):
+        return pwd_context.verify(plain_password, stored_password_hash)
+    return plain_password == stored_password_hash
+
+
+def migrate_legacy_passwords(db: Session):
+    legacy_users = db.query(models.User).all()
+    updated = 0
+    for user in legacy_users:
+        if user.password_hash and not is_password_hashed(user.password_hash):
+            user.password_hash = hash_password(user.password_hash)
+            updated += 1
+    if updated:
+        db.commit()
+        logger.info("migrated legacy plaintext passwords count=%s", updated)
+
+
+def get_login_key(request: Request, username: str) -> str:
+    client_host = request.client.host if request.client else "unknown"
+    return f"{client_host}:{sanitize_username(username).lower()}"
+
+
+def is_rate_limited(login_key: str) -> bool:
+    now = time.time()
+    attempts = [attempt for attempt in login_attempts.get(login_key, []) if now - attempt < LOGIN_WINDOW_SECONDS]
+    login_attempts[login_key] = attempts
+    return len(attempts) >= LOGIN_MAX_ATTEMPTS
+
+
+def record_failed_login(login_key: str):
+    now = time.time()
+    attempts = [attempt for attempt in login_attempts.get(login_key, []) if now - attempt < LOGIN_WINDOW_SECONDS]
+    attempts.append(now)
+    login_attempts[login_key] = attempts
+
+
+def clear_failed_logins(login_key: str):
+    login_attempts.pop(login_key, None)
 
 def create_access_token(data: dict):
     to_encode = data.copy()
@@ -483,25 +547,47 @@ def root():
 
 @app.post("/signup")
 def signup(user: schemas.UserCreate, db: Session = Depends(get_db)):
-    existing_user = db.query(models.User).filter(models.User.username == user.username).first()
+    username = sanitize_username(user.username)
+    existing_user = db.query(models.User).filter(models.User.username == username).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="Username already exists")
 
-    db.add(models.User(username=user.username, password_hash=pwd_context.hash(user.password)))
+    db.add(models.User(username=username, password_hash=hash_password(user.password)))
     db.commit()
-    logger.info("signup success username=%s", user.username)
+    logger.info("signup success username=%s", username)
     return {"message": "User created"}
 
 @app.post("/login")
-def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    logger.info("login attempt username=%s", form_data.username)
-    db_user = db.query(models.User).filter(models.User.username == form_data.username).first()
+def login(
+    request: Request,
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db),
+):
+    username = sanitize_username(form_data.username)
+    login_key = get_login_key(request, username)
+
+    if is_rate_limited(login_key):
+        logger.warning("login rate limited username=%s client=%s", username, request.client.host if request.client else "unknown")
+        raise HTTPException(status_code=429, detail="Too many login attempts. Try again later.")
+
+    logger.info("login attempt username=%s client=%s", username, request.client.host if request.client else "unknown")
+    db_user = db.query(models.User).filter(models.User.username == username).first()
     if not db_user:
-        logger.warning("login failed unknown username=%s", form_data.username)
-        raise HTTPException(status_code=401, detail="Invalid username or password")
-    if not pwd_context.verify(form_data.password, db_user.password_hash):
-        logger.warning("login failed bad password username=%s", form_data.username)
-        raise HTTPException(status_code=401, detail="Invalid username or password")
+        record_failed_login(login_key)
+        logger.warning("login failed unknown username=%s client=%s", username, request.client.host if request.client else "unknown")
+        raise HTTPException(status_code=401, detail="User not found")
+    if not verify_password(form_data.password, db_user.password_hash):
+        record_failed_login(login_key)
+        logger.warning("login failed bad password username=%s client=%s", username, request.client.host if request.client else "unknown")
+        raise HTTPException(status_code=401, detail="Incorrect password")
+
+    if not is_password_hashed(db_user.password_hash):
+        db_user.password_hash = hash_password(form_data.password)
+        db.commit()
+        db.refresh(db_user)
+        logger.info("login upgraded legacy password hash username=%s", username)
+
+    clear_failed_logins(login_key)
 
     token = create_access_token(
         data={
@@ -510,7 +596,7 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
             "username": db_user.username,
         }
     )
-    logger.info("login success username=%s role=%s", db_user.username, db_user.role)
+    logger.info("login success username=%s role=%s client=%s", db_user.username, db_user.role, request.client.host if request.client else "unknown")
     return {"access_token": token, "token_type": "bearer"}
 
 

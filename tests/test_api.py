@@ -96,7 +96,7 @@ def test_login_rejects_invalid_credentials(client):
     response = login(client, password="wrongpass123")
 
     assert response.status_code == 401
-    assert response.json()["detail"] == "Invalid username or password"
+    assert response.json()["detail"] == "Incorrect password"
 
 
 def test_invalid_token_returns_401(client):
@@ -104,6 +104,13 @@ def test_invalid_token_returns_401(client):
 
     assert response.status_code == 401
     assert response.json()["detail"] == "Invalid authentication"
+
+
+def test_login_returns_user_not_found_for_missing_user(client):
+    response = login(client, username="missing-user")
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "User not found"
 
 
 def test_non_admin_cannot_access_dashboard(client):
@@ -189,3 +196,31 @@ def test_order_and_print_queue_flow(client, app_module):
     empty_queue_response = client.get("/admin/print-queue", headers=auth_headers(admin_token))
     assert empty_queue_response.status_code == 200
     assert empty_queue_response.json() == []
+
+
+def test_legacy_plaintext_password_is_upgraded_on_login(client, app_module):
+    db = app_module.SessionLocal()
+    try:
+        user = app_module.models.User(
+            username="legacyuser",
+            password_hash="legacy-password",
+            role="user",
+        )
+        db.add(user)
+        db.commit()
+    finally:
+        db.close()
+
+    response = login(client, username="legacyuser", password="legacy-password")
+    assert response.status_code == 200
+    token = response.json()["access_token"]
+    assert token
+
+    db = app_module.SessionLocal()
+    try:
+        refreshed_user = db.query(app_module.models.User).filter_by(username="legacyuser").first()
+        assert refreshed_user is not None
+        assert refreshed_user.password_hash != "legacy-password"
+        assert app_module.is_password_hashed(refreshed_user.password_hash)
+    finally:
+        db.close()
