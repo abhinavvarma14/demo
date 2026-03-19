@@ -81,7 +81,7 @@ function Orders(){
                 {item.item_name || "Unnamed item"} • {item.mode || "-"} • {item.print_type === "single" ? "Single" : item.print_type === "double" ? "Double" : item.print_type || "-"} • Qty {item.quantity}
                 {item.leave_date && (
                   <div className="mt-1 text-xs text-white/55">
-                    Leave Date: {item.leave_date}
+                    Leave: {item.leave_date}{item.leave_to_date ? ` to ${item.leave_to_date}` : ""}
                   </div>
                 )}
                 {item.request_reason && (

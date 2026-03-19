@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useState } from "react"
 import { motion } from "framer-motion"
+import { createPortal } from "react-dom"
 import { useNavigate } from "react-router-dom"
 import API from "../api/api"
 import toast from "react-hot-toast"
@@ -18,7 +19,8 @@ function BookCard({ book }) {
   const [hasAdded, setHasAdded] = useState(false)
   const [pulseKey, setPulseKey] = useState(0)
   const [showDetailsModal, setShowDetailsModal] = useState(false)
-  const [leaveDate, setLeaveDate] = useState("")
+  const [leaveFromDate, setLeaveFromDate] = useState("")
+  const [leaveToDate, setLeaveToDate] = useState("")
   const [requestReason, setRequestReason] = useState("")
   const options = Array.isArray(book?.options) ? book.options : []
   const printTypeOptions = useMemo(
@@ -70,6 +72,15 @@ function BookCard({ book }) {
     }
   }, [availableOptions, selectedPrintType])
 
+  useEffect(() => {
+    if (!showDetailsModal) return
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = "hidden"
+    return () => {
+      document.body.style.overflow = previousOverflow
+    }
+  }, [showDetailsModal])
+
   const addToCart = async () => {
     if (!selectedOption) {
       toast.error("Pricing unavailable for this book")
@@ -88,8 +99,12 @@ function BookCard({ book }) {
     }
 
     if (requiresDetails) {
-      if (!leaveDate) {
-        toast.error("Please enter your leave date")
+      if (!leaveFromDate || !leaveToDate) {
+        toast.error("Please enter leave dates")
+        return
+      }
+      if (leaveFromDate > leaveToDate) {
+        toast.error("From date must be before To date")
         return
       }
       if (!requestReason.trim()) {
@@ -106,7 +121,8 @@ function BookCard({ book }) {
         mode: selectedOption.mode || undefined,
         print_type: selectedOption.print_type || undefined,
         quantity,
-        leave_date: requiresDetails ? leaveDate : undefined,
+        leave_date: requiresDetails ? leaveFromDate : undefined,
+        leave_to_date: requiresDetails ? leaveToDate : undefined,
         request_reason: requiresDetails ? requestReason.trim() : undefined,
       })
       setHasAdded(true)
@@ -233,50 +249,69 @@ function BookCard({ book }) {
           />
         </div>
       </div>
+      {showDetailsModal &&
+        createPortal(
+          <div className="fixed inset-0 z-[100] flex items-end justify-center bg-black/70 p-3 backdrop-blur-sm sm:items-center">
+            <div className="w-full max-w-md rounded-2xl bg-[#111111] p-4 shadow-[0_18px_34px_rgba(0,0,0,0.3)]">
+              <p className="text-sm font-semibold text-white">
+                Enter your leave dates and reason
+              </p>
 
-      {showDetailsModal && (
-        <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/70 p-3 backdrop-blur-sm">
-          <div className="w-full rounded-2xl bg-[#111111] p-4 shadow-[0_18px_34px_rgba(0,0,0,0.3)]">
-            <p className="text-sm font-semibold text-white">
-              Enter your leave date and reason
-            </p>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <div>
+                  <p className="mb-2 text-[11px] uppercase tracking-[0.24em] text-white/45">
+                    From
+                  </p>
+                  <input
+                    type="date"
+                    value={leaveFromDate}
+                    onChange={(event) => setLeaveFromDate(event.target.value)}
+                    className="w-full rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white"
+                  />
+                </div>
+                <div>
+                  <p className="mb-2 text-[11px] uppercase tracking-[0.24em] text-white/45">
+                    To
+                  </p>
+                  <input
+                    type="date"
+                    value={leaveToDate}
+                    onChange={(event) => setLeaveToDate(event.target.value)}
+                    className="w-full rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white"
+                  />
+                </div>
+              </div>
 
-            <input
-              type="date"
-              value={leaveDate}
-              onChange={(event) => setLeaveDate(event.target.value)}
-              className="mt-3 w-full rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white"
-            />
+              <textarea
+                value={requestReason}
+                onChange={(event) => setRequestReason(event.target.value)}
+                rows={3}
+                placeholder="Reason you want this..."
+                className="mt-3 w-full rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white"
+              />
 
-            <textarea
-              value={requestReason}
-              onChange={(event) => setRequestReason(event.target.value)}
-              rows={3}
-              placeholder="Reason you want this..."
-              className="mt-3 w-full rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white"
-            />
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowDetailsModal(false)}
+                  className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white"
+                >
+                  Cancel
+                </button>
 
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => setShowDetailsModal(false)}
-                className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white"
-              >
-                Cancel
-              </button>
-
-              <button
-                type="button"
-                onClick={addToCart}
-                disabled={submitting}
-                className="rounded-xl bg-yellow-400 px-4 py-3 text-sm font-semibold text-black disabled:opacity-60"
-              >
-                {submitting ? "Adding..." : "Add"}
-              </button>
+                <button
+                  type="button"
+                  onClick={addToCart}
+                  disabled={submitting}
+                  className="rounded-xl bg-yellow-400 px-4 py-3 text-sm font-semibold text-black disabled:opacity-60"
+                >
+                  {submitting ? "Adding..." : "Add"}
+                </button>
+              </div>
             </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body
+        )}
     </motion.article>
   )
 }

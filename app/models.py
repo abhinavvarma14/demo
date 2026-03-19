@@ -98,6 +98,7 @@ class CartItem(Base):
     calculated_price = Column(Float, default=0)
     total_price = Column(Float, default=0)
     leave_date = Column(String, nullable=True)
+    leave_to_date = Column(String, nullable=True)
     request_reason = Column(String, nullable=True)
 
     user = relationship("User", back_populates="cart_items")
@@ -145,6 +146,7 @@ class OrderItem(Base):
     total_price = Column(Float, default=0)
     printed = Column(Boolean, default=False, index=True)
     leave_date = Column(String, nullable=True)
+    leave_to_date = Column(String, nullable=True)
     request_reason = Column(String, nullable=True)
 
     order = relationship("Order", back_populates="items")

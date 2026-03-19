@@ -374,6 +374,7 @@ def sync_schema():
             "unit_price": "ALTER TABLE cart_items ADD COLUMN unit_price FLOAT DEFAULT 0",
             "total_price": "ALTER TABLE cart_items ADD COLUMN total_price FLOAT DEFAULT 0",
             "leave_date": "ALTER TABLE cart_items ADD COLUMN leave_date VARCHAR",
+            "leave_to_date": "ALTER TABLE cart_items ADD COLUMN leave_to_date VARCHAR",
             "request_reason": "ALTER TABLE cart_items ADD COLUMN request_reason VARCHAR",
         },
         "order_items": {
@@ -389,6 +390,7 @@ def sync_schema():
             "total_price": "ALTER TABLE order_items ADD COLUMN total_price FLOAT DEFAULT 0",
             "printed": "ALTER TABLE order_items ADD COLUMN printed BOOLEAN DEFAULT FALSE",
             "leave_date": "ALTER TABLE order_items ADD COLUMN leave_date VARCHAR",
+            "leave_to_date": "ALTER TABLE order_items ADD COLUMN leave_to_date VARCHAR",
             "request_reason": "ALTER TABLE order_items ADD COLUMN request_reason VARCHAR",
         },
         "support_threads": {
@@ -589,6 +591,7 @@ def serialize_cart_item(item: models.CartItem):
         "unit_price": item.unit_price,
         "total_price": item.total_price or item.calculated_price,
         "leave_date": item.leave_date,
+        "leave_to_date": item.leave_to_date,
         "request_reason": item.request_reason,
         "upload": serialize_upload(item.upload) if item.upload else None,
     }
@@ -617,6 +620,7 @@ def serialize_order_item(item: models.OrderItem):
         "total_price": item.total_price or item.calculated_price,
         "printed": item.printed,
         "leave_date": item.leave_date,
+        "leave_to_date": item.leave_to_date,
         "request_reason": item.request_reason,
     }
 
@@ -678,6 +682,7 @@ def serialize_delivery_order(order: models.Order):
                 "quantity": item.quantity,
                 "stored_filename": item.stored_filename,
                 "leave_date": item.leave_date,
+                "leave_to_date": item.leave_to_date,
                 "request_reason": item.request_reason,
             }
             for item in order.items
@@ -1119,6 +1124,7 @@ def add_to_cart(
         option = get_book_option(db, payload.book_id, payload.mode, payload.print_type)
         total_price = option.price * payload.quantity
         leave_date = payload.leave_date.strip() if payload.leave_date else None
+        leave_to_date = payload.leave_to_date.strip() if payload.leave_to_date else None
         request_reason = payload.request_reason.strip() if payload.request_reason else None
         existing = (
             db.query(models.CartItem)
@@ -1137,6 +1143,7 @@ def add_to_cart(
             existing.total_price = existing.quantity * option.price
             existing.calculated_price = existing.total_price
             existing.leave_date = leave_date or existing.leave_date
+            existing.leave_to_date = leave_to_date or existing.leave_to_date
             existing.request_reason = request_reason or existing.request_reason
             cart_item = existing
         else:
@@ -1153,6 +1160,7 @@ def add_to_cart(
                 total_price=total_price,
                 calculated_price=total_price,
                 leave_date=leave_date,
+                leave_to_date=leave_to_date,
                 request_reason=request_reason,
             )
             db.add(cart_item)
@@ -1322,6 +1330,7 @@ def create_order(
                 calculated_price=cart_item.calculated_price,
                 total_price=cart_item.total_price or cart_item.calculated_price,
                 leave_date=cart_item.leave_date,
+                leave_to_date=cart_item.leave_to_date,
                 request_reason=cart_item.request_reason,
             )
         )

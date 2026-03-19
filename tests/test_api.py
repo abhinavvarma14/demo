@@ -340,12 +340,14 @@ def test_special_request_book_carries_leave_date_and_reason(client, app_module):
             "book_id": book_id,
             "quantity": 1,
             "leave_date": "2026-03-20",
+            "leave_to_date": "2026-03-25",
             "request_reason": "Need approval for leave",
         },
         headers=auth_headers(buyer_token),
     )
     assert add_cart_response.status_code == 200
     assert add_cart_response.json()["leave_date"] == "2026-03-20"
+    assert add_cart_response.json()["leave_to_date"] == "2026-03-25"
     assert add_cart_response.json()["request_reason"] == "Need approval for leave"
 
     order_response = client.post(
@@ -364,6 +366,7 @@ def test_special_request_book_carries_leave_date_and_reason(client, app_module):
     assert admin_orders_response.status_code == 200
     admin_order_items = admin_orders_response.json()[0]["items"]
     assert admin_order_items[0]["leave_date"] == "2026-03-20"
+    assert admin_order_items[0]["leave_to_date"] == "2026-03-25"
     assert admin_order_items[0]["request_reason"] == "Need approval for leave"
 
 

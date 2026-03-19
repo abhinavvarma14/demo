@@ -102,7 +102,7 @@ function Delivery() {
                   </div>
                   {item.leave_date && (
                     <p className="mt-1 text-xs text-white/55">
-                      Leave Date: {item.leave_date}
+                      Leave: {item.leave_date}{item.leave_to_date ? ` to ${item.leave_to_date}` : ""}
                     </p>
                   )}
                   {item.request_reason && (

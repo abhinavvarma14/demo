@@ -101,6 +101,7 @@ class CartItemCreate(BaseModel):
     print_type: Optional[str] = None
     quantity: int = Field(default=1, gt=0)
     leave_date: Optional[str] = None
+    leave_to_date: Optional[str] = None
     request_reason: Optional[str] = None
 
     @field_validator("item_type")
@@ -134,6 +135,14 @@ class CartItemCreate(BaseModel):
     @field_validator("leave_date")
     @classmethod
     def validate_leave_date(cls, value: Optional[str]):
+        if value is None:
+            return value
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("leave_to_date")
+    @classmethod
+    def validate_leave_to_date(cls, value: Optional[str]):
         if value is None:
             return value
         normalized = value.strip()
