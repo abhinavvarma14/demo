@@ -51,8 +51,22 @@ RAZORPAY_KEY_ID = get_required_env("RAZORPAY_KEY_ID")
 RAZORPAY_KEY_SECRET = get_required_env("RAZORPAY_KEY_SECRET")
 WEBHOOK_SECRET = get_required_env("WEBHOOK_SECRET")
 
+_railway_public_domain = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
+if _railway_public_domain:
+    _railway_public_domain = (
+        _railway_public_domain.removeprefix("https://")
+        .removeprefix("http://")
+        .rstrip("/")
+    )
+    _railway_origin = f"https://{_railway_public_domain}"
+else:
+    _railway_origin = "https://abhinav-varma-production.up.railway.app"
+
 DEFAULT_CORS_ORIGINS = [
     "https://demo-ashy-sigma.vercel.app",
+    # Railway backend origin (so same-domain tools/clients won’t trip CORS).
+    # Uses Railway-provided domain when available; falls back to current hardcoded domain.
+    _railway_origin,
     "http://localhost:5173",
     "http://localhost:3000",
     "http://127.0.0.1:5173",
