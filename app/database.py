@@ -1,6 +1,4 @@
 import os
-import socket
-
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
@@ -48,33 +46,12 @@ def init_engine(logger=None) -> Engine:
         parsed_url = make_url(database_url)
         dialect_name = parsed_url.get_backend_name()
         safe_url = parsed_url.render_as_string(hide_password=True)
-        host = parsed_url.host
-        port = parsed_url.port
     except Exception:
         dialect_name = "unknown"
         safe_url = "<unparseable>"
-        host = None
-        port = None
 
     if logger:
         logger.info("db init database_url_present=%s dialect=%s url=%s", has_database_url, dialect_name, safe_url)
-
-    # Fail fast with a clear message when the database host cannot be resolved (common with VPN/DNS filters).
-    if dialect_name in {"postgresql", "postgres"} and host:
-        try:
-            socket.getaddrinfo(host, port or 5432)
-        except OSError as exc:
-            if logger:
-                logger.error(
-                    "db init failed: cannot resolve database host host=%s port=%s error=%s",
-                    host,
-                    port or 5432,
-                    str(exc),
-                )
-            raise RuntimeError(
-                f"Database host cannot be resolved: {host}. "
-                "Check your DNS/VPN/network or verify the Neon host in DATABASE_URL."
-            ) from exc
 
     engine_kwargs = {"pool_pre_ping": True}
     if database_url.startswith("sqlite"):
@@ -85,9 +62,6 @@ def init_engine(logger=None) -> Engine:
     try:
         engine = create_engine(database_url, **engine_kwargs)
         SessionLocal.configure(bind=engine)
-        # Verify connectivity early so Railway logs are explicit if Neon rejects connection.
-        with engine.connect() as connection:
-            connection.exec_driver_sql("SELECT 1")
         if logger:
             logger.info("db init success dialect=%s", dialect_name)
         return engine
