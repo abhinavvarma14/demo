@@ -1,6 +1,22 @@
 import axios from "axios"
 
-export const API_BASE_URL = import.meta.env.VITE_API_URL
+const DEV_API_BASE_URL = "http://127.0.0.1:8000"
+const DEFAULT_API_BASE_URL = "https://abhinav-varma-production.up.railway.app"
+
+const normalizeBaseUrl = (value) => {
+  const trimmed = String(value || "").trim()
+  if (!trimmed) return import.meta.env.DEV ? DEV_API_BASE_URL : DEFAULT_API_BASE_URL
+
+  if (import.meta.env.DEV) {
+    const looksLikeProductionRailway = /abhinav-varma-production\.up\.railway\.app/i.test(trimmed)
+    if (looksLikeProductionRailway) return DEV_API_BASE_URL
+  }
+
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return trimmed.replace(/\/+$/, "")
+  return `https://${trimmed.replace(/\/+$/, "")}`
+}
+
+export const API_BASE_URL = normalizeBaseUrl(import.meta.env.VITE_API_URL)
 
 const API = axios.create({
   baseURL: API_BASE_URL
