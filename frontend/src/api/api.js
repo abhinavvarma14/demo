@@ -1,15 +1,15 @@
 import axios from "axios"
 
 const DEV_API_BASE_URL = "http://127.0.0.1:8000"
-const DEFAULT_API_BASE_URL = "https://abhinav-varma-production.up.railway.app"
+const DEFAULT_API_BASE_URL = "https://demo-production-c073.up.railway.app"
 
 const normalizeBaseUrl = (value) => {
   const trimmed = String(value || "").trim()
   if (!trimmed) return import.meta.env.DEV ? DEV_API_BASE_URL : DEFAULT_API_BASE_URL
 
   if (import.meta.env.DEV) {
-    const looksLikeProductionRailway = /abhinav-varma-production\.up\.railway\.app/i.test(trimmed)
-    if (looksLikeProductionRailway) return DEV_API_BASE_URL
+    const isLocalUrl = /localhost|127\.0\.0\.1/i.test(trimmed)
+    if (!isLocalUrl) return DEV_API_BASE_URL
   }
 
   if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return trimmed.replace(/\/+$/, "")
