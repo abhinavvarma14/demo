@@ -5,13 +5,15 @@ const DEFAULT_API_BASE_URL = "https://demo-production-c073.up.railway.app"
 
 const normalizeBaseUrl = (value) => {
   const trimmed = String(value || "").trim()
-  if (!trimmed) return import.meta.env.DEV ? DEV_API_BASE_URL : DEFAULT_API_BASE_URL
-
   if (import.meta.env.DEV) {
+    if (!trimmed) return DEV_API_BASE_URL
     const isLocalUrl = /localhost|127\.0\.0\.1/i.test(trimmed)
-    if (!isLocalUrl) return DEV_API_BASE_URL
+    return isLocalUrl
+      ? (trimmed.startsWith("http://") || trimmed.startsWith("https://") ? trimmed.replace(/\/+$/, "") : `http://${trimmed.replace(/\/+$/, "")}`)
+      : DEV_API_BASE_URL
   }
 
+  if (!trimmed) return DEFAULT_API_BASE_URL
   if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return trimmed.replace(/\/+$/, "")
   return `https://${trimmed.replace(/\/+$/, "")}`
 }

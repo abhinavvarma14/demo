@@ -64,6 +64,8 @@ else:
 
 DEFAULT_CORS_ORIGINS = [
     "https://demo-ashy-sigma.vercel.app",
+    "https://batprint.vercel.app",
+    "https://www.batprint.vercel.app",
     # Railway backend origin (so same-domain tools/clients won’t trip CORS).
     # Uses Railway-provided domain when available; falls back to current hardcoded domain.
     _railway_origin,
