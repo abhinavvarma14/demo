@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session, joinedload
 load_dotenv()
 
 from . import models, schemas
-from .database import SessionLocal, engine
+from .database import SessionLocal, get_engine, init_engine
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("batprint")
@@ -102,11 +102,11 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
 
-models.Base.metadata.create_all(bind=engine)
-
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    # Initialize DB engine at startup so Neon/Railway connection issues are logged clearly.
+    engine = init_engine(logger=logger)
     models.Base.metadata.create_all(bind=engine)
     sync_schema()
     db = SessionLocal()
@@ -364,6 +364,7 @@ def decode_print_group_id(group_id: str) -> tuple[str, str | None, str]:
 
 
 def sync_schema():
+    engine = get_engine()
     inspector = inspect(engine)
     expected_columns = {
         "books": {

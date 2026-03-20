@@ -31,15 +31,16 @@ def app_module():
     module = importlib.import_module("app.main")
     yield module
 
-    module.engine.dispose()
+    module.get_engine().dispose()
     if TEST_DB_PATH.exists():
         TEST_DB_PATH.unlink()
 
 
 @pytest.fixture()
 def reset_db(app_module):
-    app_module.models.Base.metadata.drop_all(bind=app_module.engine)
-    app_module.models.Base.metadata.create_all(bind=app_module.engine)
+    engine = app_module.get_engine()
+    app_module.models.Base.metadata.drop_all(bind=engine)
+    app_module.models.Base.metadata.create_all(bind=engine)
     app_module.sync_schema()
     app_module.seed_defaults()
 
