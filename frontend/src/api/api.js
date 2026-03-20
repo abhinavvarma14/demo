@@ -14,11 +14,22 @@ const normalizeBaseUrl = (value) => {
   }
 
   if (!trimmed) return DEFAULT_API_BASE_URL
-  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return trimmed.replace(/\/+$/, "")
-  return `https://${trimmed.replace(/\/+$/, "")}`
+  const normalized = trimmed.startsWith("http://") || trimmed.startsWith("https://")
+    ? trimmed.replace(/\/+$/, "")
+    : `https://${trimmed.replace(/\/+$/, "")}`
+
+  if (/demo-production-c073\.up\.railway\.app/i.test(normalized)) {
+    return normalized
+  }
+
+  return DEFAULT_API_BASE_URL
 }
 
 export const API_BASE_URL = normalizeBaseUrl(import.meta.env.VITE_API_URL)
+
+if (import.meta.env.DEV) {
+  console.info("[batprint] API base URL:", API_BASE_URL)
+}
 
 const API = axios.create({
   baseURL: API_BASE_URL
