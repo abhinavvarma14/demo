@@ -43,10 +43,6 @@ function Terms() {
         <p>
           <span className="font-semibold text-white">Brand Name:</span> BatPrint
         </p>
-        <p>
-          <span className="font-semibold text-white">Legal Name:</span>{" "}
-          PADMAVATHI SAYYAPARAJU
-        </p>
       </div>
     </div>
   )

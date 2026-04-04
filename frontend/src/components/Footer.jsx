@@ -24,7 +24,6 @@ function Footer() {
 
         <div className="mt-3 space-y-1">
           <p>© 2026 Batprint. All rights reserved.</p>
-          <p>Legal Name: PADMAVATHI SAYYAPARAJU</p>
         </div>
       </div>
     </footer>

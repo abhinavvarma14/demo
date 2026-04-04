@@ -16,19 +16,8 @@ function Contact() {
             BatPrint
           </p>
           <p>
-            <span className="font-semibold text-white">Legal Name:</span>{" "}
-            PADMAVATHI SAYYAPARAJU
-          </p>
-          <p>
             <span className="font-semibold text-white">Email:</span>{" "}
             batprint6@gmail.com
-          </p>
-          <p>
-            <span className="font-semibold text-white">Phone:</span> 9052612456
-          </p>
-          <p>
-            <span className="font-semibold text-white">Address:</span> ACB
-            Colony, First House, Bommuru, Rajahmundry, 533124
           </p>
         </div>
 
