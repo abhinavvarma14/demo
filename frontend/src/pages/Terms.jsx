@@ -39,10 +39,6 @@ function Terms() {
           We reserve the right to suspend or terminate access to users who
           misuse the platform.
         </p>
-
-        <p>
-          <span className="font-semibold text-white">Brand Name:</span> BatPrint
-        </p>
       </div>
     </div>
   )

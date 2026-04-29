@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
@@ -194,6 +195,12 @@ class PaymentVerification(BaseModel):
     razorpay_signature: str
 
 
+class UpiPaymentVerification(BaseModel):
+    amount: float = Field(gt=0)
+    timestamp: datetime
+    raw_text: Optional[str] = None
+
+
 class CartItemUpdate(BaseModel):
     quantity: int = Field(gt=0)
 
@@ -229,4 +236,58 @@ class SupportMessageCreate(BaseModel):
         normalized = value.strip()
         if not normalized:
             raise ValueError("Message is required")
+        return normalized
+
+
+class BannerUpdate(BaseModel):
+    title: Optional[str] = Field(default=None, max_length=200)
+    subtitle: Optional[str] = Field(default=None, max_length=400)
+    link: Optional[str] = Field(default=None, max_length=500)
+    clickable: Optional[bool] = None
+    active: Optional[bool] = None
+
+
+class ApiOrderItemCreate(BaseModel):
+    book_id: int
+    quantity: int = Field(gt=0)
+    mode: Optional[str] = None
+    print_type: Optional[str] = None
+
+
+class ApiOrderCreate(BaseModel):
+    username: str = Field(min_length=2, max_length=120)
+    phone_number: str = Field(min_length=10, max_length=10)
+    hostel: str = Field(min_length=2, max_length=120)
+    alternate_phone: Optional[str] = Field(default=None, min_length=10, max_length=10)
+    items: list[ApiOrderItemCreate]
+
+    @field_validator("phone_number", "alternate_phone")
+    @classmethod
+    def validate_api_phone(cls, value: Optional[str]):
+        if value is None:
+            return value
+        normalized = value.strip()
+        if not normalized.isdigit() or len(normalized) != 10:
+            raise ValueError("Phone number must contain exactly 10 digits")
+        return normalized
+
+    @field_validator("hostel", "username")
+    @classmethod
+    def validate_api_text(cls, value: str):
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Field is required")
+        return normalized
+
+
+class ApiOrderVerify(BaseModel):
+    order_id: int
+    utr: str = Field(min_length=4, max_length=120)
+
+    @field_validator("utr")
+    @classmethod
+    def validate_utr(cls, value: str):
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("UTR is required")
         return normalized

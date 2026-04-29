@@ -97,6 +97,14 @@ function AppRoutes() {
                   </ProtectedRoute>
                 }
               />
+              <Route
+                path="/admin/banners"
+                element={
+                  <ProtectedRoute role="admin">
+                    <Admin defaultSection="banners" />
+                  </ProtectedRoute>
+                }
+              />
 
               <Route
                 path="/orders"

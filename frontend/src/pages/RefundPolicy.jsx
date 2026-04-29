@@ -30,14 +30,6 @@ function RefundPolicy() {
           Approved refunds, if any, will be processed within a reasonable
           timeframe.
         </p>
-
-        <p>
-          <span className="font-semibold text-white">Brand Name:</span> BatPrint
-        </p>
-        <p>
-          <span className="font-semibold text-white">Legal Name:</span>{" "}
-          PADMAVATHI SAYYAPARAJU
-        </p>
       </div>
     </div>
   )

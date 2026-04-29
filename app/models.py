@@ -16,6 +16,10 @@ class User(Base):
     password = Column(String, nullable=True)
     password_hash = Column(String, nullable=False)
     role = Column(String, default="user")
+    phone_number = Column(String, nullable=True, index=True)
+    hostel = Column(String, nullable=True)
+    alternate_phone = Column(String, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     uploads = relationship("Upload", back_populates="user", cascade="all, delete")
     cart_items = relationship("CartItem", back_populates="user", cascade="all, delete")
@@ -118,7 +122,13 @@ class Order(Base):
     total_amount = Column(Float, default=0)
     razorpay_order_id = Column(String, nullable=True)
     razorpay_payment_id = Column(String, nullable=True)
+    payment_status = Column(String, default="pending")
+    payment_method = Column(String, default="UPI")
+    utr = Column(String, nullable=True)
     status = Column(String, default="pending")
+    unique_amount = Column(Float, nullable=True, index=True)
+    payment_started_at = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     user = relationship("User", back_populates="orders")
@@ -186,3 +196,16 @@ class AppSetting(Base):
     id = Column(Integer, primary_key=True, index=True)
     key = Column(String, unique=True, index=True, nullable=False)
     value = Column(String, nullable=True)
+
+
+class Banner(Base):
+    __tablename__ = "banners"
+
+    id = Column(String, primary_key=True, index=True)
+    image_url = Column(String, nullable=False)
+    title = Column(String, nullable=True)
+    subtitle = Column(String, nullable=True)
+    link = Column(String, nullable=True)
+    clickable = Column(Boolean, default=False)
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))

@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import API from "../api/api"
 import toast from "react-hot-toast"
 import { getApiErrorMessage } from "../utils/apiError"
+
+const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
 
 function Checkout() {
   const hostelOptions = [
@@ -16,24 +18,33 @@ function Checkout() {
   ]
 
   const navigate = useNavigate()
+  const redirectTriggeredRef = useRef(false)
   const [deliveryType, setDeliveryType] = useState("hostel")
   const [hostel, setHostel] = useState("Himalaya")
   const [contact, setContact] = useState("")
   const [alternate, setAlternate] = useState("")
   const [total, setTotal] = useState(0)
   const [submitting, setSubmitting] = useState(false)
-  const [paymentStarted, setPaymentStarted] = useState(false)
-  const [utr, setUtr] = useState("")
-  const [paymentMessage, setPaymentMessage] = useState("")
+  const [orderId, setOrderId] = useState(null)
+  const [upiLink, setUpiLink] = useState("")
+  const [expiresAt, setExpiresAt] = useState("")
   const [formError, setFormError] = useState("")
-  const [utrError, setUtrError] = useState("")
+  const [timeLeft, setTimeLeft] = useState(0)
+  const [paymentStatus, setPaymentStatus] = useState("WAITING_FOR_PAYMENT")
 
   const normalizePhoneInput = (value) => value.replace(/\D/g, "").slice(0, 10)
+  const sessionExpired = Boolean(expiresAt) && timeLeft <= 0
 
-  const upiLink = useMemo(() => {
-    const amount = Number(total || 0).toFixed(2)
-    return `upi://pay?pa=yourupi@upi&pn=BatPrint&am=${encodeURIComponent(amount)}&cu=INR`
-  }, [total])
+  const formattedTimeLeft = useMemo(() => {
+    const minutes = Math.floor(timeLeft / 60)
+    const seconds = timeLeft % 60
+    return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
+  }, [timeLeft])
+
+  const qrCodeUrl = useMemo(() => {
+    if (!upiLink) return ""
+    return `https://quickchart.io/qr?size=320&text=${encodeURIComponent(upiLink)}`
+  }, [upiLink])
 
   useEffect(() => {
     const loadCartTotal = async () => {
@@ -53,6 +64,64 @@ function Checkout() {
 
     loadCartTotal()
   }, [navigate])
+
+  useEffect(() => {
+    if (!expiresAt) {
+      setTimeLeft(0)
+      return undefined
+    }
+
+    const updateTime = () => {
+      const expiresAtMs = new Date(expiresAt).getTime()
+      const diff = Math.max(0, Math.floor((expiresAtMs - Date.now()) / 1000))
+      setTimeLeft(diff)
+    }
+
+    updateTime()
+    const interval = window.setInterval(updateTime, 1000)
+    return () => window.clearInterval(interval)
+  }, [expiresAt])
+
+  useEffect(() => {
+    if (!orderId) {
+      return undefined
+    }
+
+    const pollStatus = async () => {
+      try {
+        const res = await API.get("/my-orders")
+        const currentOrder = (res.data || []).find((order) => order.id === orderId)
+        if (!currentOrder) {
+          return
+        }
+        setPaymentStatus(currentOrder.payment_status || "WAITING_FOR_PAYMENT")
+        if (currentOrder.expires_at) {
+          setExpiresAt(currentOrder.expires_at)
+        }
+      } catch (error) {
+        console.log(error)
+      }
+    }
+
+    pollStatus()
+    const interval = window.setInterval(pollStatus, 7000)
+    return () => window.clearInterval(interval)
+  }, [orderId])
+
+  useEffect(() => {
+    if (!isMobile || !upiLink || redirectTriggeredRef.current || paymentStatus === "FAILED") {
+      return
+    }
+    redirectTriggeredRef.current = true
+    window.location.href = upiLink
+  }, [upiLink, paymentStatus])
+
+  useEffect(() => {
+    if (paymentStatus === "SUCCESS" || paymentStatus === "LATE_SUCCESS") {
+      toast.success("Payment confirmed")
+      navigate("/orders")
+    }
+  }, [navigate, paymentStatus])
 
   const handlePay = async () => {
     setFormError("")
@@ -87,41 +156,57 @@ function Checkout() {
 
     try {
       setSubmitting(true)
-      setPaymentMessage("")
-      setPaymentStarted(true)
+      redirectTriggeredRef.current = false
+      const orderRes = await API.post("/orders", {
+        delivery_type: deliveryType,
+        hostel_name: deliveryType === "hostel" ? hostel : null,
+        contact_number: contact,
+        alternate_contact_number: alternate || null,
+      })
 
-      toast.success("Opening UPI app")
-
-      const openLink = () => {
-        const anchor = document.createElement("a")
-        anchor.href = upiLink
-        anchor.setAttribute("rel", "noopener")
-        document.body.appendChild(anchor)
-        anchor.click()
-        anchor.remove()
-      }
-
-      setTimeout(openLink, 100)
+      setOrderId(orderRes.data.order_id)
+      setUpiLink(orderRes.data.upi_link || "")
+      setExpiresAt(orderRes.data.expires_at || "")
+      setPaymentStatus(orderRes.data.payment_status || "WAITING_FOR_PAYMENT")
+      toast.success("Payment session started")
     } catch (error) {
       console.log(error)
-      toast.error(getApiErrorMessage(error, "Unable to open UPI payment"))
+      toast.error(getApiErrorMessage(error, "Unable to start payment"))
     } finally {
       setSubmitting(false)
     }
   }
 
-  const handleSubmitPayment = (e) => {
-    e.preventDefault()
-    setUtrError("")
-
-    if (!utr.trim()) {
-      setUtrError("Please enter UTR / Transaction ID")
-      toast.error("Please enter UTR / Transaction ID")
+  const handleRetryPayment = async () => {
+    if (!orderId) {
+      toast.error("Order not found. Please start again.")
       return
     }
 
-    setPaymentMessage("✅ Payment submitted successfully. Verification in progress")
-    toast.success("Payment submitted successfully")
+    try {
+      setSubmitting(true)
+      redirectTriggeredRef.current = false
+      const res = await API.post(`/regenerate-payment/${orderId}`)
+      setUpiLink(res.data.upi_link || "")
+      setExpiresAt(res.data.expires_at || "")
+      setPaymentStatus(res.data.payment_status || "WAITING_FOR_PAYMENT")
+      toast.success("Payment session renewed")
+    } catch (error) {
+      console.log(error)
+      toast.error(getApiErrorMessage(error, "Failed to regenerate payment"))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const renderStatus = () => {
+    if (paymentStatus === "VERIFYING_PAYMENT") {
+      return "Verifying your payment..."
+    }
+    if (paymentStatus === "FAILED" || sessionExpired) {
+      return "Session expired"
+    }
+    return "Waiting for payment confirmation..."
   }
 
   return (
@@ -197,86 +282,63 @@ function Checkout() {
       </div>
 
       <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-        <p className="text-sm text-gray-400">Total Amount</p>
-        <p className="text-2xl font-bold text-yellow-400">₹{total}</p>
+        <p className="text-sm text-gray-400">Cart Total</p>
+        <p className="text-2xl font-bold text-yellow-400">Rs {Number(total || 0).toFixed(2)}</p>
       </div>
 
       <button
         onClick={handlePay}
-        disabled={submitting || total <= 0}
+        disabled={submitting || total <= 0 || Boolean(orderId && !sessionExpired && paymentStatus !== "FAILED")}
         className="mt-6 w-full rounded-xl bg-yellow-400 py-3 font-semibold text-black transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-60"
       >
-        {submitting ? "Opening UPI..." : "Pay via UPI"}
+        {submitting ? "Starting Payment..." : orderId && !sessionExpired && paymentStatus !== "FAILED" ? "Payment Session Active" : "Confirm Address"}
       </button>
 
       {formError && (
         <p className="mt-3 text-sm font-medium text-red-500">{formError}</p>
       )}
 
-      {paymentStarted && (
+      {orderId && (
         <div className="mt-6 rounded-2xl border border-yellow-400/20 bg-white/5 p-4 backdrop-blur">
-          <h2 className="text-xl font-bold text-yellow-400">
-            Complete Your Payment
-          </h2>
-          <p className="mt-2 text-sm text-gray-300">
-            After completing payment, paste your UTR (Transaction ID) below
+          {isMobile ? (
+            <>
+              <h2 className="text-xl font-bold text-yellow-400">Redirecting to payment app...</h2>
+              <p className="mt-2 text-sm text-gray-300">Complete payment in your UPI app</p>
+            </>
+          ) : (
+            <>
+              <h2 className="text-xl font-bold text-yellow-400">Scan using any UPI app</h2>
+              <div className="mt-4 flex justify-center">
+                <div className="overflow-hidden rounded-2xl border border-white/10 bg-white p-3">
+                  <img
+                    src={qrCodeUrl}
+                    alt="UPI QR Code"
+                    className="h-64 w-64"
+                  />
+                </div>
+              </div>
+            </>
+          )}
+
+          {!sessionExpired && paymentStatus !== "FAILED" && (
+            <div className="mt-4 rounded-xl border border-white/10 bg-black/20 p-4 text-center">
+              <p className="text-sm text-gray-400">Session Expires In</p>
+              <p className="mt-2 text-3xl font-bold text-white">{formattedTimeLeft}</p>
+            </div>
+          )}
+
+          <p className="mt-4 text-center text-sm text-gray-300">
+            {renderStatus()}
           </p>
 
-          <div className="mt-4 rounded-xl border border-white/10 bg-black/20 p-3 text-sm text-gray-300">
-            <p className="font-semibold text-white">UPI Deep Link</p>
-            <p className="mt-1 break-all text-xs text-gray-400">{upiLink}</p>
-          </div>
-
-          <form onSubmit={handleSubmitPayment} className="mt-4 space-y-4">
-            <div>
-              <label className="mb-2 block text-sm text-gray-400">
-                Enter UTR / Transaction ID
-              </label>
-              <input
-                value={utr}
-                onChange={(e) => setUtr(e.target.value)}
-                placeholder="Enter UTR / Transaction ID"
-                className="w-full rounded-xl border border-white/10 bg-white/5 p-3"
-              />
-              {utrError && (
-                <p className="mt-2 text-sm text-red-500">{utrError}</p>
-              )}
-            </div>
-
+          {(sessionExpired || paymentStatus === "FAILED") && (
             <button
-              type="submit"
-              className="w-full rounded-xl bg-yellow-400 py-3 font-semibold text-black transition hover:bg-yellow-300"
+              onClick={handleRetryPayment}
+              disabled={submitting}
+              className="mt-4 w-full rounded-xl bg-yellow-400 py-3 font-semibold text-black transition hover:bg-yellow-300 disabled:opacity-60"
             >
-              Submit Payment
+              {submitting ? "Retrying..." : "Retry Payment"}
             </button>
-          </form>
-
-          {/* TODO: Replace with actual UTR guide image */}
-          <div className="mt-5 overflow-hidden rounded-2xl border border-white/10 bg-black/20 p-4">
-            <div className="flex items-center gap-3">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-yellow-400/10 text-yellow-400">
-                ↑
-              </div>
-              <div>
-                <p className="font-semibold text-white">
-                  Find UTR in PhonePe / GPay payment details
-                </p>
-                <p className="text-xs text-gray-400">
-                  UTR is usually listed in the transaction or payment reference
-                  section.
-                </p>
-              </div>
-            </div>
-
-            <div className="mt-4 flex h-40 items-center justify-center rounded-xl border border-dashed border-yellow-400/20 bg-white/5 text-center text-sm text-gray-400">
-              UTR guide image placeholder
-            </div>
-          </div>
-
-          {paymentMessage && (
-            <p className="mt-4 text-sm font-medium text-green-400">
-              {paymentMessage}
-            </p>
           )}
         </div>
       )}

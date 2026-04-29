@@ -3,6 +3,7 @@ import shutil
 import uuid
 import logging
 import base64
+import random
 import time
 from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
@@ -34,8 +35,12 @@ LOGIN_MAX_ATTEMPTS = int(os.getenv("LOGIN_MAX_ATTEMPTS", "5"))
 login_attempts: dict[str, list[float]] = {}
 PDF_SINGLE_PRICE_PER_PAGE = 1.25
 PDF_SINGLE_BASE_CHARGE = 65.0
-PDF_DOUBLE_PRICE_PER_PAGE = 1.15
-PDF_DOUBLE_BASE_CHARGE = 62.0
+PDF_DOUBLE_PRICE_PER_PAGE = 1.25
+PDF_DOUBLE_BASE_CHARGE = 65.0
+UPI_ID = "9052612456@axl"
+UPI_PAYEE_NAME = "BatPrint"
+PAYMENT_WINDOW_MINUTES = 5
+PAYMENT_LATE_BUFFER_MINUTES = 3
 
 def get_required_env(name: str) -> str:
     value = os.getenv(name)
@@ -318,6 +323,8 @@ def get_pdf_pricing_values(print_type: str | None):
 
 def calculate_pdf_total(total_pages: int, print_type: str | None = None) -> float:
     pricing = get_pdf_pricing_values(print_type)
+    if pricing["print_type"] == "double":
+        return ((total_pages / 2) * pricing["price_per_page"]) + pricing["base_charge"]
     return (total_pages * pricing["price_per_page"]) + pricing["base_charge"]
 
 
@@ -369,6 +376,13 @@ def sync_schema():
     engine = get_engine()
     inspector = inspect(engine)
     expected_columns = {
+        "users": {
+            "phone_number": "ALTER TABLE users ADD COLUMN phone_number VARCHAR",
+            "hostel": "ALTER TABLE users ADD COLUMN hostel VARCHAR",
+            "alternate_phone": "ALTER TABLE users ADD COLUMN alternate_phone VARCHAR",
+            "created_at": "ALTER TABLE users ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+            "password_hash": "ALTER TABLE users ADD COLUMN password_hash VARCHAR",
+        },
         "books": {
             "requires_details": "ALTER TABLE books ADD COLUMN requires_details BOOLEAN DEFAULT FALSE",
             "is_pinned": "ALTER TABLE books ADD COLUMN is_pinned BOOLEAN DEFAULT FALSE",
@@ -378,9 +392,6 @@ def sync_schema():
             "original_filename": "ALTER TABLE uploads ADD COLUMN original_filename VARCHAR",
             "mode": "ALTER TABLE uploads ADD COLUMN mode VARCHAR",
             "created_at": "ALTER TABLE uploads ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
-        },
-        "users": {
-            "password_hash": "ALTER TABLE users ADD COLUMN password_hash VARCHAR",
         },
         "cart_items": {
             "book_id": "ALTER TABLE cart_items ADD COLUMN book_id INTEGER",
@@ -409,6 +420,14 @@ def sync_schema():
             "leave_date": "ALTER TABLE order_items ADD COLUMN leave_date VARCHAR",
             "leave_to_date": "ALTER TABLE order_items ADD COLUMN leave_to_date VARCHAR",
             "request_reason": "ALTER TABLE order_items ADD COLUMN request_reason VARCHAR",
+        },
+        "orders": {
+            "payment_status": "ALTER TABLE orders ADD COLUMN payment_status VARCHAR DEFAULT 'pending'",
+            "payment_method": "ALTER TABLE orders ADD COLUMN payment_method VARCHAR DEFAULT 'UPI'",
+            "utr": "ALTER TABLE orders ADD COLUMN utr VARCHAR",
+            "unique_amount": "ALTER TABLE orders ADD COLUMN unique_amount FLOAT",
+            "payment_started_at": "ALTER TABLE orders ADD COLUMN payment_started_at TIMESTAMP",
+            "expires_at": "ALTER TABLE orders ADD COLUMN expires_at TIMESTAMP",
         },
         "support_threads": {
             "status": "ALTER TABLE support_threads ADD COLUMN status VARCHAR DEFAULT 'open'",
@@ -574,6 +593,19 @@ def serialize_admin_book(book: models.Book):
     }
 
 
+def serialize_banner(banner: models.Banner):
+    return {
+        "id": banner.id,
+        "image": banner.image_url,
+        "title": banner.title,
+        "subtitle": banner.subtitle,
+        "link": banner.link,
+        "clickable": bool(banner.clickable),
+        "active": bool(banner.active),
+        "created_at": banner.created_at.isoformat() if banner.created_at else None,
+    }
+
+
 def serialize_upload(upload: models.Upload):
     return {
         "id": upload.id,
@@ -650,7 +682,13 @@ def serialize_order(order: models.Order, include_user: bool = False):
         "contact_number": order.contact_number,
         "alternate_contact_number": order.alternate_contact_number,
         "total_amount": order.total_amount,
+        "unique_amount": order.unique_amount,
+        "payment_status": order.payment_status,
+        "payment_method": order.payment_method,
+        "utr": order.utr,
         "status": order.status,
+        "payment_started_at": order.payment_started_at.isoformat() if order.payment_started_at else None,
+        "expires_at": order.expires_at.isoformat() if order.expires_at else None,
         "created_at": order.created_at.isoformat() if order.created_at else None,
         "items": [serialize_order_item(item) for item in order.items],
     }
@@ -658,6 +696,9 @@ def serialize_order(order: models.Order, include_user: bool = False):
         payload["user"] = {
             "id": order.user.id if order.user else None,
             "username": order.user.username if order.user else "",
+            "phone_number": order.user.phone_number if order.user else None,
+            "hostel": order.user.hostel if order.user else None,
+            "alternate_phone": order.user.alternate_phone if order.user else None,
         }
     return payload
 
@@ -675,8 +716,86 @@ def set_setting_value(db: Session, key: str, value: str):
     else:
         setting.value = value
     db.commit()
+
+
+def save_uploaded_asset(file: UploadFile, prefix: str) -> str:
+    extension = Path(file.filename or "").suffix or ".bin"
+    stored_filename = f"{prefix}_{uuid.uuid4().hex}{extension}"
+    destination = UPLOAD_DIR / stored_filename
+    with destination.open("wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+    return stored_filename
+
+
+def generate_system_password() -> str:
+    return hash_password(uuid.uuid4().hex)
+
+
+def build_unique_username(base_username: str, phone_number: str, db: Session) -> str:
+    normalized_base = sanitize_username(base_username).replace(" ", "_") or "user"
+    candidate = normalized_base
+    counter = 1
+    while db.query(models.User).filter(models.User.username == candidate).first():
+        candidate = f"{normalized_base}_{phone_number[-4:]}_{counter}"
+        counter += 1
+    return candidate
     db.refresh(setting)
     return setting
+
+
+def now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def generate_upi_link(amount: float) -> str:
+    return f"upi://pay?pa={UPI_ID}&pn={UPI_PAYEE_NAME}&am={amount:.2f}&cu=INR"
+
+
+def expire_payment_if_needed(order: models.Order, db: Session) -> bool:
+    if (
+        order.payment_status == "WAITING_FOR_PAYMENT"
+        and order.expires_at
+        and now_utc() > order.expires_at
+    ):
+        order.payment_status = "FAILED"
+        db.add(order)
+        db.commit()
+        db.refresh(order)
+        return True
+    return False
+
+
+def generate_unique_amount(base_amount: float, db: Session, exclude_order_id: int | None = None) -> float:
+    normalized_base = round(float(base_amount), 2)
+    current_time = now_utc()
+
+    for _ in range(50):
+        candidate = round(normalized_base + (random.randint(1, 99) / 100), 2)
+        query = db.query(models.Order.id).filter(
+            models.Order.unique_amount == candidate,
+            models.Order.payment_status == "WAITING_FOR_PAYMENT",
+            models.Order.expires_at.is_not(None),
+            models.Order.expires_at > current_time,
+        )
+        if exclude_order_id is not None:
+            query = query.filter(models.Order.id != exclude_order_id)
+        if not query.first():
+            return candidate
+
+    raise HTTPException(status_code=503, detail="Unable to generate a unique payment amount")
+
+
+def start_order_payment_session(order: models.Order, db: Session) -> models.Order:
+    current_time = now_utc()
+    order.unique_amount = generate_unique_amount(order.total_amount, db, exclude_order_id=order.id)
+    order.payment_started_at = current_time
+    order.expires_at = current_time + timedelta(minutes=PAYMENT_WINDOW_MINUTES)
+    order.payment_status = "WAITING_FOR_PAYMENT"
+    order.payment_method = "UPI"
+    db.add(order)
+    db.commit()
+    db.refresh(order)
+    return order
 
 
 def serialize_delivery_order(order: models.Order):
@@ -850,7 +969,15 @@ def login_alias(
 
 @app.get("/me")
 def me(current_user: models.User = Depends(get_current_user)):
-    return {"id": current_user.id, "username": current_user.username, "role": current_user.role}
+    return {
+        "id": current_user.id,
+        "username": current_user.username,
+        "role": current_user.role,
+        "phone_number": current_user.phone_number,
+        "hostel": current_user.hostel,
+        "alternate_phone": current_user.alternate_phone,
+        "created_at": current_user.created_at.isoformat() if current_user.created_at else None,
+    }
 
 
 @app.get("/books")
@@ -951,6 +1078,126 @@ def delete_book(
     db.commit()
     logger.info("admin deleted book admin_id=%s book_id=%s", current_user.id, book_id)
     return {"message": "Book deleted"}
+
+
+@app.get("/api/banners")
+def get_banners(
+    include_all: bool = False,
+    db: Session = Depends(get_db),
+):
+    query = db.query(models.Banner)
+    if not include_all:
+        query = query.filter(models.Banner.active.is_(True))
+    banners = query.order_by(models.Banner.created_at.desc()).all()
+    return [serialize_banner(banner) for banner in banners]
+
+
+@app.get("/admin/banners")
+def get_admin_banners(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    banners = db.query(models.Banner).order_by(models.Banner.created_at.desc()).all()
+    return [serialize_banner(banner) for banner in banners]
+
+
+@app.post("/api/banners")
+async def create_banner(
+    image: UploadFile = File(...),
+    title: str | None = Form(None),
+    subtitle: str | None = Form(None),
+    link: str | None = Form(None),
+    clickable: bool = Form(False),
+    active: bool = Form(True),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    stored_filename = save_uploaded_asset(image, "banner")
+    banner = models.Banner(
+        id=uuid.uuid4().hex,
+        image_url=f"/uploads/{stored_filename}",
+        title=(title or "").strip() or None,
+        subtitle=(subtitle or "").strip() or None,
+        link=(link or "").strip() or None,
+        clickable=clickable,
+        active=active,
+    )
+    db.add(banner)
+    db.commit()
+    db.refresh(banner)
+    logger.info("admin created banner admin_id=%s banner_id=%s", current_user.id, banner.id)
+    return serialize_banner(banner)
+
+
+@app.put("/api/banners/{banner_id}")
+async def update_banner(
+    banner_id: str,
+    image: UploadFile | None = File(None),
+    title: str | None = Form(None),
+    subtitle: str | None = Form(None),
+    link: str | None = Form(None),
+    clickable: bool | None = Form(None),
+    active: bool | None = Form(None),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    banner = db.query(models.Banner).filter(models.Banner.id == banner_id).first()
+    if not banner:
+        raise HTTPException(status_code=404, detail="Banner not found")
+
+    if image is not None and image.filename:
+        previous_image = banner.image_url
+        stored_filename = save_uploaded_asset(image, "banner")
+        banner.image_url = f"/uploads/{stored_filename}"
+        if previous_image and previous_image.startswith("/uploads/"):
+            old_path = Path("app") / previous_image.lstrip("/")
+            if old_path.exists():
+                try:
+                    old_path.unlink()
+                except OSError:
+                    logger.warning("failed to delete old banner image banner_id=%s path=%s", banner.id, old_path)
+
+    if title is not None:
+        banner.title = title.strip() or None
+    if subtitle is not None:
+        banner.subtitle = subtitle.strip() or None
+    if link is not None:
+        banner.link = link.strip() or None
+    if clickable is not None:
+        banner.clickable = clickable
+    if active is not None:
+        banner.active = active
+
+    db.commit()
+    db.refresh(banner)
+    logger.info("admin updated banner admin_id=%s banner_id=%s", current_user.id, banner.id)
+    return serialize_banner(banner)
+
+
+@app.delete("/api/banners/{banner_id}")
+def delete_banner(
+    banner_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    banner = db.query(models.Banner).filter(models.Banner.id == banner_id).first()
+    if not banner:
+        raise HTTPException(status_code=404, detail="Banner not found")
+
+    image_url = banner.image_url
+    db.delete(banner)
+    db.commit()
+
+    if image_url and image_url.startswith("/uploads/"):
+        image_path = Path("app") / image_url.lstrip("/")
+        if image_path.exists():
+            try:
+                image_path.unlink()
+            except OSError:
+                logger.warning("failed to delete banner image banner_id=%s path=%s", banner_id, image_path)
+
+    logger.info("admin deleted banner admin_id=%s banner_id=%s", current_user.id, banner_id)
+    return {"message": "Banner deleted"}
 
 
 @app.post("/admin/book-options")
@@ -1315,6 +1562,9 @@ def create_order(
         raise HTTPException(status_code=400, detail="Cart is empty")
 
     total_amount = sum((item.total_price or item.calculated_price or 0) for item in cart_items)
+    current_user.phone_number = order.contact_number
+    current_user.hostel = order.hostel_name if order.delivery_type == "hostel" else order.delivery_type
+    current_user.alternate_phone = order.alternate_contact_number
     new_order = models.Order(
         user_id=current_user.id,
         delivery_type=order.delivery_type,
@@ -1322,6 +1572,8 @@ def create_order(
         contact_number=order.contact_number,
         alternate_contact_number=order.alternate_contact_number,
         total_amount=total_amount,
+        payment_status="PENDING",
+        payment_method="UPI",
         status="pending",
     )
     db.add(new_order)
@@ -1354,8 +1606,128 @@ def create_order(
 
     db.commit()
     db.refresh(new_order)
+    new_order = start_order_payment_session(new_order, db)
     logger.info("order created order_id=%s user_id=%s total=%s", new_order.id, current_user.id, new_order.total_amount)
-    return {"order_id": new_order.id, "total_amount": new_order.total_amount}
+    return {
+        "order_id": new_order.id,
+        "total_amount": new_order.total_amount,
+        "unique_amount": new_order.unique_amount,
+        "upi_link": generate_upi_link(new_order.unique_amount or new_order.total_amount),
+        "payment_status": new_order.payment_status,
+        "payment_started_at": new_order.payment_started_at.isoformat() if new_order.payment_started_at else None,
+        "expires_at": new_order.expires_at.isoformat() if new_order.expires_at else None,
+    }
+
+
+@app.post("/api/orders")
+def create_api_order(
+    payload: schemas.ApiOrderCreate,
+    db: Session = Depends(get_db),
+):
+    if not payload.items:
+        raise HTTPException(status_code=400, detail="At least one item is required")
+
+    user = db.query(models.User).filter(models.User.phone_number == payload.phone_number).first()
+    if user is None:
+        username = build_unique_username(payload.username, payload.phone_number, db)
+        generated_password = generate_system_password()
+        user = models.User(
+            username=username,
+            password_hash=generated_password,
+            password=generated_password,
+            role="user",
+            phone_number=payload.phone_number,
+            hostel=payload.hostel,
+            alternate_phone=payload.alternate_phone,
+        )
+        db.add(user)
+        db.flush()
+    else:
+        user.username = payload.username.strip() or user.username
+        user.phone_number = payload.phone_number
+        user.hostel = payload.hostel
+        user.alternate_phone = payload.alternate_phone
+
+    order = models.Order(
+        user_id=user.id,
+        delivery_type="hostel",
+        hostel_name=payload.hostel,
+        contact_number=payload.phone_number,
+        alternate_contact_number=payload.alternate_phone,
+        total_amount=0,
+        payment_status="pending",
+        payment_method="UPI",
+        status="pending",
+    )
+    db.add(order)
+    db.flush()
+
+    total_amount = 0.0
+    for requested_item in payload.items:
+        book = (
+            db.query(models.Book)
+            .options(joinedload(models.Book.options))
+            .filter(models.Book.id == requested_item.book_id, models.Book.is_active.is_(True))
+            .first()
+        )
+        if not book:
+            raise HTTPException(status_code=404, detail=f"Book {requested_item.book_id} not found")
+
+        if requested_item.mode is not None or requested_item.print_type is not None:
+            option = get_book_option(
+                db,
+                requested_item.book_id,
+                requested_item.mode or "",
+                requested_item.print_type or "",
+            )
+        else:
+            option = sorted(book.options, key=lambda item: item.price)[0] if book.options else None
+
+        if option is None:
+            raise HTTPException(status_code=400, detail=f"Book {book.name} does not have pricing configured")
+
+        line_total = option.price * requested_item.quantity
+        total_amount += line_total
+        db.add(
+            models.OrderItem(
+                order_id=order.id,
+                item_type="book",
+                reference_id=book.id,
+                book_id=book.id,
+                item_name=book.name,
+                mode=normalize_book_mode(option.mode),
+                print_type=option.print_type,
+                quantity=requested_item.quantity,
+                unit_price=option.price,
+                calculated_price=line_total,
+                total_price=line_total,
+            )
+        )
+
+    order.total_amount = total_amount
+    db.commit()
+    db.refresh(order)
+    logger.info("api order created order_id=%s user_id=%s total=%s", order.id, user.id, total_amount)
+    return {"order_id": order.id, "total_amount": order.total_amount}
+
+
+@app.post("/api/orders/verify")
+def verify_api_order(
+    payload: schemas.ApiOrderVerify,
+    db: Session = Depends(get_db),
+):
+    order = db.query(models.Order).filter(models.Order.id == payload.order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    order.utr = payload.utr.strip()
+    order.payment_status = "verified"
+    order.payment_method = "UPI"
+    order.status = "paid"
+    db.query(models.CartItem).filter(models.CartItem.user_id == order.user_id).delete()
+    db.commit()
+    logger.info("api order verified order_id=%s", order.id)
+    return {"message": "Order verified", "order_id": order.id}
 
 
 @app.post("/order/create")
@@ -1380,21 +1752,91 @@ def create_payment(
     )
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    if order.payment_status in {"SUCCESS", "LATE_SUCCESS", "verified"}:
+        raise HTTPException(status_code=400, detail="Payment already completed for this order")
 
-    try:
-        razorpay_order = razorpay_client.order.create(
-            {"amount": int(order.total_amount * 100), "currency": "INR", "payment_capture": 1}
-        )
-    except Exception:
-        logger.exception("payment order creation failed order_id=%s user_id=%s", order.id, current_user.id)
-        raise HTTPException(status_code=502, detail="Unable to create payment order")
-    order.razorpay_order_id = razorpay_order["id"]
-    db.commit()
-    logger.info("payment order created order_id=%s user_id=%s razorpay_order_id=%s", order.id, current_user.id, order.razorpay_order_id)
+    expire_payment_if_needed(order, db)
+    order = start_order_payment_session(order, db)
+    logger.info("payment session created order_id=%s user_id=%s unique_amount=%s", order.id, current_user.id, order.unique_amount)
     return {
-        **razorpay_order,
-        "key_id": RAZORPAY_KEY_ID,
+        "order_id": order.id,
+        "unique_amount": order.unique_amount,
+        "upi_link": generate_upi_link(order.unique_amount or order.total_amount),
+        "payment_status": order.payment_status,
+        "payment_started_at": order.payment_started_at.isoformat() if order.payment_started_at else None,
+        "expires_at": order.expires_at.isoformat() if order.expires_at else None,
     }
+
+
+@app.post("/regenerate-payment/{order_id}")
+def regenerate_payment(
+    order_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    order = (
+        db.query(models.Order)
+        .filter(models.Order.id == order_id, models.Order.user_id == current_user.id)
+        .first()
+    )
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order.payment_status in {"SUCCESS", "LATE_SUCCESS", "verified"}:
+        raise HTTPException(status_code=400, detail="Payment already completed for this order")
+
+    expire_payment_if_needed(order, db)
+    if order.payment_status == "WAITING_FOR_PAYMENT" and order.expires_at and now_utc() <= order.expires_at:
+        raise HTTPException(status_code=400, detail="Current payment session is still active")
+
+    order = start_order_payment_session(order, db)
+    logger.info("payment session regenerated order_id=%s user_id=%s unique_amount=%s", order.id, current_user.id, order.unique_amount)
+    return {
+        "order_id": order.id,
+        "unique_amount": order.unique_amount,
+        "upi_link": generate_upi_link(order.unique_amount or order.total_amount),
+        "payment_status": order.payment_status,
+        "payment_started_at": order.payment_started_at.isoformat() if order.payment_started_at else None,
+        "expires_at": order.expires_at.isoformat() if order.expires_at else None,
+    }
+
+
+@app.post("/verify-payment")
+def verify_custom_payment(
+    payload: schemas.UpiPaymentVerification,
+    db: Session = Depends(get_db),
+):
+    amount = round(payload.amount, 2)
+    payment_timestamp = payload.timestamp if payload.timestamp.tzinfo else payload.timestamp.replace(tzinfo=timezone.utc)
+    order = (
+        db.query(models.Order)
+        .filter(
+            models.Order.unique_amount == amount,
+            models.Order.payment_status == "WAITING_FOR_PAYMENT",
+        )
+        .order_by(models.Order.payment_started_at.desc())
+        .first()
+    )
+    if not order:
+        raise HTTPException(status_code=404, detail="No waiting payment found for this amount")
+
+    if order.expires_at and payment_timestamp <= order.expires_at:
+        order.payment_status = "SUCCESS"
+    elif order.expires_at and payment_timestamp <= order.expires_at + timedelta(minutes=PAYMENT_LATE_BUFFER_MINUTES):
+        order.payment_status = "LATE_SUCCESS"
+    else:
+        order.payment_status = "FAILED"
+        db.commit()
+        logger.info("late payment ignored order_id=%s unique_amount=%s", order.id, amount)
+        return {"matched": False, "order_id": order.id, "payment_status": order.payment_status}
+
+    order.payment_method = "UPI"
+    order.status = "paid"
+    if payload.raw_text:
+        order.utr = payload.raw_text[:255]
+    db.query(models.CartItem).filter(models.CartItem.user_id == order.user_id).delete()
+    db.commit()
+    logger.info("custom payment verified order_id=%s status=%s amount=%s", order.id, order.payment_status, amount)
+    return {"matched": True, "order_id": order.id, "payment_status": order.payment_status}
 
 
 @app.post("/payment/verify")
@@ -1427,6 +1869,8 @@ def verify_payment(
         raise HTTPException(status_code=404, detail="Order not found")
 
     order.status = "paid"
+    order.payment_status = "verified"
+    order.payment_method = "UPI"
     order.razorpay_payment_id = payload.razorpay_payment_id
     db.query(models.CartItem).filter(models.CartItem.user_id == current_user.id).delete()
     db.commit()
@@ -1449,6 +1893,8 @@ def my_orders(
         .order_by(models.Order.created_at.desc())
         .all()
     )
+    for order in orders:
+        expire_payment_if_needed(order, db)
     return [serialize_order(order) for order in orders]
 
 

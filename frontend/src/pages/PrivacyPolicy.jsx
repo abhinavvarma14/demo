@@ -35,10 +35,6 @@ function PrivacyPolicy() {
           By using BatPrint, you consent to the collection and use of your
           information in accordance with this policy.
         </p>
-
-        <p>
-          <span className="font-semibold text-white">Brand Name:</span> BatPrint
-        </p>
       </div>
     </div>
   )

@@ -4,6 +4,7 @@ import { Upload } from "lucide-react"
 import API from "../api/api"
 import BookCard from "../components/BookCard"
 import SearchBar from "../components/SearchBar"
+import TopBannerCarousel from "../components/TopBannerCarousel"
 import toast from "react-hot-toast"
 import { getApiErrorMessage } from "../utils/apiError"
 
@@ -64,6 +65,8 @@ function Home(){
           </button>
         ))}
       </div>
+
+      <TopBannerCarousel />
 
       {/* Books Grid */}
 

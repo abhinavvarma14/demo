@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion"
-import { useMemo, useState } from "react"
+import { useEffect, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { useDropzone } from "react-dropzone"
 import * as pdfjsLib from "pdfjs-dist"
@@ -21,14 +21,36 @@ function Upload() {
   const [submitting, setSubmitting] = useState(false)
   const [printType, setPrintType] = useState("single")
   const [uploadedState, setUploadedState] = useState(false)
-  const price = useMemo(() => {
-    if (!file || pages <= 0) {
-      return 0
+  const [price, setPrice] = useState(0)
+  const [loadingPrice, setLoadingPrice] = useState(false)
+
+  useEffect(() => {
+    const fetchPricing = async () => {
+      if (!file || pages <= 0) {
+        setPrice(0)
+        return
+      }
+
+      try {
+        setLoadingPrice(true)
+        const res = await API.get("/pricing/pdf", {
+          params: {
+            total_pages: pages,
+            print_type: printType,
+            copies: 1,
+          },
+        })
+        setPrice(Number(res.data.total_price || 0))
+      } catch (error) {
+        console.log(error)
+        setPrice(0)
+        toast.error(getApiErrorMessage(error, "Unable to fetch price"))
+      } finally {
+        setLoadingPrice(false)
+      }
     }
-    if (printType === "double") {
-      return (pages * 1.15) + 62
-    }
-    return (pages * 1.25) + 65
+
+    fetchPricing()
   }, [file, pages, printType])
 
   const onDrop = async (acceptedFiles) => {
@@ -230,7 +252,7 @@ function Upload() {
         </p>
 
         <p className="text-2xl font-bold text-yellow-400">
-          ₹{price.toFixed(2)}
+          {loadingPrice ? "Calculating..." : `₹${price.toFixed(2)}`}
         </p>
       </div>
 
@@ -243,7 +265,6 @@ function Upload() {
       </button>
     </div>
   )
-
 }
 
 export default Upload

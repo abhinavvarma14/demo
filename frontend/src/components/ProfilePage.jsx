@@ -53,10 +53,10 @@ function ProfilePage() {
       setSupportThreads((current) => [res.data, ...current])
       setSupportMessage("")
       setActivePanel("help")
-      toast.success("Help request sent")
+      toast.success("Support request sent")
     } catch (error) {
       console.log(error)
-      toast.error(getApiErrorMessage(error, "Failed to send help request"))
+      toast.error(getApiErrorMessage(error, "Failed to send support request"))
     } finally {
       setSubmittingSupport("")
     }
@@ -95,20 +95,20 @@ function ProfilePage() {
 
   return (
     <div className="px-4 pb-28 pt-24">
-      <div className="rounded-[28px] border border-white/10 bg-white/5 p-5 shadow-[0_24px_60px_rgba(0,0,0,0.2)] backdrop-blur-xl">
-        <p className="text-xs uppercase tracking-[0.34em] text-white/45">
+      <div className="rounded-[28px] border border-white/10 bg-[#111111] p-5 shadow-[0_24px_60px_rgba(0,0,0,0.28)] backdrop-blur-xl">
+        <p className="text-xs uppercase tracking-[0.34em] text-white/35">
           Profile
         </p>
         <h1 className="mt-2 text-2xl font-semibold text-white">
           Hello, {username || "there"}
         </h1>
-        <p className="mt-2 text-sm text-white/60">
-          Check your order status and contact support from one place.
+        <p className="mt-2 text-sm text-white/55">
+          Track your orders and chat with support from one place.
         </p>
 
         <div className="mt-5 grid gap-3">
-          <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-            <p className="text-sm text-white/50">User details</p>
+          <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+            <p className="text-sm text-white/45">User details</p>
             <p className="mt-2 text-lg font-medium text-white">{username}</p>
           </div>
 
@@ -118,7 +118,7 @@ function ProfilePage() {
               className={`rounded-2xl border p-4 text-left transition ${
                 activePanel === "orders"
                   ? "border-yellow-400 bg-yellow-400/10 text-yellow-400"
-                  : "border-white/10 bg-white/5 text-white"
+                  : "border-white/10 bg-black/20 text-white"
               }`}
             >
               <p className="text-sm font-semibold">Orders</p>
@@ -130,11 +130,11 @@ function ProfilePage() {
               className={`rounded-2xl border p-4 text-left transition ${
                 activePanel === "help"
                   ? "border-yellow-400 bg-yellow-400/10 text-yellow-400"
-                  : "border-white/10 bg-white/5 text-white"
+                  : "border-white/10 bg-black/20 text-white"
               }`}
             >
-              <p className="text-sm font-semibold">Help</p>
-              <p className="mt-1 text-xs text-white/60">Drop your issue here</p>
+              <p className="text-sm font-semibold">Support</p>
+              <p className="mt-1 text-xs text-white/60">Share your issue here</p>
             </button>
           </div>
         </div>
@@ -147,13 +147,13 @@ function ProfilePage() {
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -8 }}
-            className="mt-6 rounded-[28px] border border-white/10 bg-white/5 p-5 shadow-[0_24px_60px_rgba(0,0,0,0.2)] backdrop-blur-xl"
+            className="mt-6 rounded-[28px] border border-white/10 bg-[#111111] p-5 shadow-[0_24px_60px_rgba(0,0,0,0.28)] backdrop-blur-xl"
           >
             <div className="flex items-center justify-between gap-3">
               <h2 className="text-xl font-semibold text-white">
                 Orders
               </h2>
-              <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-white/65">
+              <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs font-semibold text-white/65">
                 {orders.length} total
               </span>
             </div>
@@ -177,7 +177,7 @@ function ProfilePage() {
                 key={order.id}
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="mt-4 rounded-2xl border border-white/20 bg-white/10 p-4"
+                className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4"
               >
                 <div className="flex items-center justify-between gap-3">
                   <p className="text-sm font-semibold text-white">
@@ -225,26 +225,26 @@ function ProfilePage() {
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -8 }}
-            className="mt-6 rounded-[28px] border border-white/10 bg-white/5 p-5 shadow-[0_24px_60px_rgba(0,0,0,0.2)] backdrop-blur-xl"
+            className="mt-6 rounded-[28px] border border-white/10 bg-[#111111] p-5 shadow-[0_24px_60px_rgba(0,0,0,0.28)] backdrop-blur-xl"
           >
             <div className="flex items-center justify-between gap-3">
               <h2 className="text-xl font-semibold text-white">
-                Help
+                Support
               </h2>
-              <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-white/65">
+              <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs font-semibold text-white/65">
                 {supportThreads.length} threads
               </span>
             </div>
 
-            <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
+            <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4">
               <p className="text-sm text-white/60">
-                Drop your issue. Also include your contact info for solving the issue betterly.
+                Share your issue here. You can also include contact details if that helps support resolve it faster.
               </p>
               <textarea
                 value={supportMessage}
                 onChange={(event) => setSupportMessage(event.target.value)}
                 rows={4}
-                placeholder="Drop your issue here... Also include your contact info."
+                placeholder="Describe your issue... You can also add contact details."
                 className="mt-3 w-full rounded-2xl border border-white/10 bg-black/20 p-3 text-sm text-white outline-none"
               />
               <button
@@ -252,18 +252,18 @@ function ProfilePage() {
                 disabled={submittingSupport === "new-thread"}
                 className="mt-3 rounded-xl bg-yellow-400 px-4 py-2 font-semibold text-black"
               >
-                {submittingSupport === "new-thread" ? "Sending..." : "Drop Issue"}
+                {submittingSupport === "new-thread" ? "Sending..." : "Send To Support"}
               </button>
             </div>
 
             {supportThreads.length === 0 && (
               <p className="mt-4 text-sm text-white/55">
-                No help queries yet
+                No support requests yet
               </p>
             )}
 
             {supportThreads.map((thread) => (
-              <div key={thread.id} className="mt-4 rounded-2xl border border-white/20 bg-white/10 p-4">
+              <div key={thread.id} className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4">
                 <div className="flex items-center justify-between gap-3">
                   <p className="text-sm font-semibold text-white">Query #{thread.id}</p>
                   <span className="rounded-full bg-white/10 px-3 py-1 text-xs capitalize text-yellow-400">
@@ -282,7 +282,7 @@ function ProfilePage() {
                       }`}
                     >
                       <p className="text-xs uppercase tracking-[0.24em] text-white/45">
-                        {message.sender_role === "admin" ? "Admin Reply" : "Your Message"}
+                        {message.sender_role === "admin" ? "Support" : "Your Message"}
                       </p>
                       <p className="mt-1">{message.message}</p>
                     </div>
