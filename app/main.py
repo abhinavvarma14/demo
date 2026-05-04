@@ -4,14 +4,14 @@ import uuid
 import logging
 import base64
 import random
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-import razorpay
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -52,10 +52,6 @@ def get_required_env(name: str) -> str:
 SECRET_KEY = get_required_env("SECRET_KEY")
 ALGORITHM = get_required_env("ALGORITHM")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(get_required_env("ACCESS_TOKEN_EXPIRE_MINUTES"))
-RAZORPAY_KEY_ID = get_required_env("RAZORPAY_KEY_ID")
-RAZORPAY_KEY_SECRET = get_required_env("RAZORPAY_KEY_SECRET")
-WEBHOOK_SECRET = get_required_env("WEBHOOK_SECRET")
-
 _railway_public_domain = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
 if _railway_public_domain:
     _railway_public_domain = (
@@ -107,7 +103,6 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
 
 
 @asynccontextmanager
@@ -1800,82 +1795,29 @@ def regenerate_payment(
     }
 
 
-@app.post("/verify-payment")
-def verify_custom_payment(
-    payload: schemas.UpiPaymentVerification,
-    db: Session = Depends(get_db),
+@app.post("/payment/phonepe")
+def receive_phonepe_notification(
+    payload: schemas.PhonePeNotification,
+    x_api_key: str | None = Header(default=None),
 ):
-    amount = round(payload.amount, 2)
-    payment_timestamp = payload.timestamp if payload.timestamp.tzinfo else payload.timestamp.replace(tzinfo=timezone.utc)
-    order = (
-        db.query(models.Order)
-        .filter(
-            models.Order.unique_amount == amount,
-            models.Order.payment_status == "WAITING_FOR_PAYMENT",
-        )
-        .order_by(models.Order.payment_started_at.desc())
-        .first()
-    )
-    if not order:
-        raise HTTPException(status_code=404, detail="No waiting payment found for this amount")
+    if x_api_key != "batprint_secure_123":
+        raise HTTPException(status_code=401, detail="Invalid API key")
 
-    if order.expires_at and payment_timestamp <= order.expires_at:
-        order.payment_status = "SUCCESS"
-    elif order.expires_at and payment_timestamp <= order.expires_at + timedelta(minutes=PAYMENT_LATE_BUFFER_MINUTES):
-        order.payment_status = "LATE_SUCCESS"
-    else:
-        order.payment_status = "FAILED"
-        db.commit()
-        logger.info("late payment ignored order_id=%s unique_amount=%s", order.id, amount)
-        return {"matched": False, "order_id": order.id, "payment_status": order.payment_status}
+    raw_text = payload.raw_text or ""
+    logger.info("PHONEPE DATA: %s", raw_text)
 
-    order.payment_method = "UPI"
-    order.status = "paid"
-    if payload.raw_text:
-        order.utr = payload.raw_text[:255]
-    db.query(models.CartItem).filter(models.CartItem.user_id == order.user_id).delete()
-    db.commit()
-    logger.info("custom payment verified order_id=%s status=%s amount=%s", order.id, order.payment_status, amount)
-    return {"matched": True, "order_id": order.id, "payment_status": order.payment_status}
+    if "₹" not in raw_text:
+        return {"status": "ignored"}
 
+    match = re.search(r"₹\s*(\d+(?:\.\d+)?)", raw_text)
+    if not match:
+        return {"status": "no amount"}
 
-@app.post("/payment/verify")
-def verify_payment(
-    payload: schemas.PaymentVerification,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user),
-):
-    try:
-        razorpay_client.utility.verify_payment_signature(
-            {
-                "razorpay_order_id": payload.razorpay_order_id,
-                "razorpay_payment_id": payload.razorpay_payment_id,
-                "razorpay_signature": payload.razorpay_signature,
-            }
-        )
-    except Exception:
-        logger.warning("payment verification failed user_id=%s razorpay_order_id=%s", current_user.id, payload.razorpay_order_id)
-        raise HTTPException(status_code=400, detail="Payment verification failed")
-
-    order = (
-        db.query(models.Order)
-        .filter(
-            models.Order.razorpay_order_id == payload.razorpay_order_id,
-            models.Order.user_id == current_user.id,
-        )
-        .first()
-    )
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
-
-    order.status = "paid"
-    order.payment_status = "verified"
-    order.payment_method = "UPI"
-    order.razorpay_payment_id = payload.razorpay_payment_id
-    db.query(models.CartItem).filter(models.CartItem.user_id == current_user.id).delete()
-    db.commit()
-    logger.info("payment verified order_id=%s user_id=%s", order.id, current_user.id)
-    return {"message": "Payment verified"}
+    amount = match.group(1)
+    return {
+        "status": "detected",
+        "amount": amount,
+    }
 
 
 @app.get("/my-orders")

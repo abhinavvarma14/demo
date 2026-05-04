@@ -1,4 +1,3 @@
-from datetime import datetime
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
@@ -189,16 +188,9 @@ class OrderCreate(BaseModel):
         return normalized
 
 
-class PaymentVerification(BaseModel):
-    razorpay_order_id: str
-    razorpay_payment_id: str
-    razorpay_signature: str
-
-
-class UpiPaymentVerification(BaseModel):
-    amount: float = Field(gt=0)
-    timestamp: datetime
-    raw_text: Optional[str] = None
+class PhonePeNotification(BaseModel):
+    raw_text: str
+    source: str
 
 
 class CartItemUpdate(BaseModel):
