@@ -1,7 +1,7 @@
 import axios from "axios"
 
 const DEV_API_BASE_URL = "http://127.0.0.1:8000"
-const DEFAULT_API_BASE_URL = "https://demo-production-c073.up.railway.app"
+const DEFAULT_API_BASE_URL = "https://demo-1-tx9r.onrender.com"
 
 const normalizeBaseUrl = (value) => {
   const trimmed = String(value || "").trim()
@@ -18,7 +18,7 @@ const normalizeBaseUrl = (value) => {
     ? trimmed.replace(/\/+$/, "")
     : `https://${trimmed.replace(/\/+$/, "")}`
 
-  if (/demo-production-c073\.up\.railway\.app/i.test(normalized)) {
+  if (/demo-1-tx9r\.onrender\.com/i.test(normalized)) {
     return normalized
   }
 

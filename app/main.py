@@ -39,7 +39,7 @@ PDF_DOUBLE_PRICE_PER_PAGE = 1.25
 PDF_DOUBLE_BASE_CHARGE = 65.0
 UPI_ID = "9052612456@axl"
 UPI_PAYEE_NAME = "BatPrint"
-PAYMENT_WINDOW_MINUTES = 5
+PAYMENT_WINDOW_MINUTES = 6
 PAYMENT_LATE_BUFFER_MINUTES = 3
 
 def get_required_env(name: str) -> str:
@@ -59,17 +59,17 @@ if _railway_public_domain:
         .removeprefix("http://")
         .rstrip("/")
     )
-    _railway_origin = f"https://{_railway_public_domain}"
+    _backend_origin = f"https://{_railway_public_domain}"
 else:
-    _railway_origin = "https://abhinav-varma-production.up.railway.app"
+    _backend_origin = "https://demo-1-tx9r.onrender.com"
 
 DEFAULT_CORS_ORIGINS = [
     "https://demo-ashy-sigma.vercel.app",
     "https://batprint.vercel.app",
     "https://www.batprint.vercel.app",
-    # Railway backend origin (so same-domain tools/clients won’t trip CORS).
-    # Uses Railway-provided domain when available; falls back to current hardcoded domain.
-    _railway_origin,
+    # Backend origin (so same-domain tools/clients won't trip CORS).
+    # Uses the provider-provided domain when available; falls back to the current hardcoded domain.
+    _backend_origin,
     "http://localhost:5173",
     "http://localhost:3000",
     "http://127.0.0.1:5173",
@@ -126,7 +126,7 @@ app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -417,6 +417,10 @@ def sync_schema():
             "request_reason": "ALTER TABLE order_items ADD COLUMN request_reason VARCHAR",
         },
         "orders": {
+            "user_name": "ALTER TABLE orders ADD COLUMN user_name VARCHAR",
+            "phone_number": "ALTER TABLE orders ADD COLUMN phone_number VARCHAR",
+            "hostel": "ALTER TABLE orders ADD COLUMN hostel VARCHAR",
+            "amount": "ALTER TABLE orders ADD COLUMN amount FLOAT DEFAULT 0",
             "payment_status": "ALTER TABLE orders ADD COLUMN payment_status VARCHAR DEFAULT 'pending'",
             "payment_method": "ALTER TABLE orders ADD COLUMN payment_method VARCHAR DEFAULT 'UPI'",
             "utr": "ALTER TABLE orders ADD COLUMN utr VARCHAR",
@@ -672,10 +676,14 @@ def serialize_order_item(item: models.OrderItem):
 def serialize_order(order: models.Order, include_user: bool = False):
     payload = {
         "id": order.id,
+        "user_name": order.user_name,
+        "phone_number": order.phone_number,
+        "hostel": order.hostel,
         "delivery_type": order.delivery_type,
         "hostel_name": order.hostel_name,
         "contact_number": order.contact_number,
         "alternate_contact_number": order.alternate_contact_number,
+        "amount": order.amount,
         "total_amount": order.total_amount,
         "unique_amount": order.unique_amount,
         "payment_status": order.payment_status,
@@ -753,6 +761,7 @@ def expire_payment_if_needed(order: models.Order, db: Session) -> bool:
         and now_utc() > order.expires_at
     ):
         order.payment_status = "FAILED"
+        order.status = "failed"
         db.add(order)
         db.commit()
         db.refresh(order)
@@ -791,6 +800,33 @@ def start_order_payment_session(order: models.Order, db: Session) -> models.Orde
     db.commit()
     db.refresh(order)
     return order
+
+
+def normalize_phonepe_text(value: str | None) -> str:
+    if not value:
+        return ""
+    return re.sub(r"\s+", " ", value.strip()).lower()
+
+
+def expire_stale_phonepe_orders(db: Session):
+    now = now_utc()
+    stale_orders = (
+        db.query(models.Order)
+        .filter(
+            models.Order.payment_status == "WAITING_FOR_PAYMENT",
+            models.Order.expires_at.is_not(None),
+            models.Order.expires_at < now,
+        )
+        .all()
+    )
+    updated = 0
+    for order in stale_orders:
+        order.payment_status = "FAILED"
+        order.status = "failed"
+        updated += 1
+    if updated:
+        db.commit()
+    return updated
 
 
 def serialize_delivery_order(order: models.Order):
@@ -1726,12 +1762,52 @@ def verify_api_order(
 
 
 @app.post("/order/create")
-def create_order_legacy(
-    order: schemas.OrderCreate,
+def create_phonepe_order(
+    order: schemas.PhonePeOrderCreate,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    return create_order(order=order, db=db, current_user=current_user)
+    expire_stale_phonepe_orders(db)
+
+    new_order = models.Order(
+        user_id=current_user.id,
+        user_name=order.user_name,
+        phone_number=order.phone_number,
+        hostel=order.hostel if order.delivery_type == "hostel" else "Day Scholar",
+        delivery_type=order.delivery_type,
+        hostel_name=order.hostel if order.delivery_type == "hostel" else None,
+        contact_number=order.phone_number,
+        alternate_contact_number=order.alternate_number or order.alternate_phone,
+        amount=order.amount,
+        total_amount=order.amount,
+        payment_status="WAITING_FOR_PAYMENT",
+        payment_method="UPI",
+        status="pending",
+    )
+    db.add(new_order)
+    db.flush()
+
+    current_user.phone_number = order.phone_number
+    current_user.hostel = order.hostel
+    if order.alternate_number or order.alternate_phone:
+        current_user.alternate_phone = order.alternate_number or order.alternate_phone
+
+    new_order = start_order_payment_session(new_order, db)
+    logger.info(
+        "phonepe order created order_id=%s user_id=%s user_name=%s total=%s unique_amount=%s",
+        new_order.id,
+        current_user.id,
+        new_order.user_name,
+        new_order.total_amount,
+        new_order.unique_amount,
+    )
+    return {
+        "order_id": new_order.id,
+        "unique_amount": new_order.unique_amount,
+        "upi_link": generate_upi_link(new_order.unique_amount or new_order.total_amount),
+        "payment_status": new_order.payment_status,
+        "expires_at": new_order.expires_at.isoformat() if new_order.expires_at else None,
+    }
 
 
 @app.post("/payment/create/{order_id}")
@@ -1795,16 +1871,51 @@ def regenerate_payment(
     }
 
 
+@app.get("/order/status/{order_id}")
+def get_phonepe_order_status(
+    order_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    expire_stale_phonepe_orders(db)
+    order = (
+        db.query(models.Order)
+        .filter(models.Order.id == order_id, models.Order.user_id == current_user.id)
+        .first()
+    )
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    expire_payment_if_needed(order, db)
+    return {
+        "order_id": order.id,
+        "status": order.status,
+        "payment_status": order.payment_status,
+        "unique_amount": order.unique_amount,
+        "amount": order.amount or order.total_amount,
+        "user_name": order.user_name,
+        "phone_number": order.phone_number,
+        "hostel": order.hostel,
+        "expires_at": order.expires_at.isoformat() if order.expires_at else None,
+        "created_at": order.created_at.isoformat() if order.created_at else None,
+    }
+
+
 @app.post("/payment/phonepe")
 def receive_phonepe_notification(
     payload: schemas.PhonePeNotification,
+    db: Session = Depends(get_db),
     x_api_key: str | None = Header(default=None),
 ):
     if x_api_key != "batprint_secure_123":
         raise HTTPException(status_code=401, detail="Invalid API key")
 
+    source = (payload.source or "").strip().lower()
     raw_text = payload.raw_text or ""
     logger.info("PHONEPE DATA: %s", raw_text)
+
+    if source != "phonepe":
+        return {"status": "ignored"}
 
     if "₹" not in raw_text:
         return {"status": "ignored"}
@@ -1813,11 +1924,47 @@ def receive_phonepe_notification(
     if not match:
         return {"status": "no amount"}
 
-    amount = match.group(1)
-    return {
-        "status": "detected",
-        "amount": amount,
-    }
+    amount = float(match.group(1))
+    sender_segment = raw_text.split("₹", 1)[0]
+    sender_name = normalize_phonepe_text(
+        sender_segment.splitlines()[0] if sender_segment.splitlines() else sender_segment
+    )
+
+    expire_stale_phonepe_orders(db)
+    now = now_utc()
+    candidate_orders = (
+        db.query(models.Order)
+        .filter(
+            models.Order.payment_status == "WAITING_FOR_PAYMENT",
+            models.Order.created_at >= now - timedelta(minutes=6),
+        )
+        .order_by(models.Order.created_at.desc())
+        .all()
+    )
+
+    matched_order = None
+    for order in candidate_orders:
+        if order.unique_amount is None:
+            continue
+        if abs(float(order.unique_amount) - amount) >= 0.01:
+            continue
+
+        order_name = normalize_phonepe_text(order.user_name or (order.user.username if order.user else ""))
+        if order_name and sender_name and order_name != sender_name:
+            continue
+
+        matched_order = order
+        break
+
+    if not matched_order:
+        return {"status": "ignored"}
+
+    matched_order.payment_status = "SUCCESS"
+    matched_order.status = "success"
+    matched_order.utr = raw_text[:120]
+    db.commit()
+    logger.info("phonepe payment matched order_id=%s amount=%s", matched_order.id, amount)
+    return {"status": "success", "order_id": matched_order.id, "amount": amount}
 
 
 @app.get("/my-orders")
@@ -2309,3 +2456,5 @@ def admin_mark_printed_by_group(
     item_name, mode, print_type = decode_print_group_id(group_id)
     payload = schemas.PrintQueueAction(item_name=item_name, mode=mode, print_type=print_type)
     return admin_print_queue_complete(payload=payload, db=db, current_user=current_user)
+
+

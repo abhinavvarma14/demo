@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+﻿import { useEffect, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import API, { API_BASE_URL } from "../api/api"
 import toast from "react-hot-toast"
@@ -117,6 +117,14 @@ function Admin({ defaultSection = "orders" }) {
     }
 
     load()
+
+    const interval = window.setInterval(() => {
+      fetchOrders()
+      fetchPrintSummary()
+      fetchAnalytics()
+    }, 10000)
+
+    return () => window.clearInterval(interval)
   }, [])
 
   const refreshAdminData = async () => {
@@ -555,7 +563,7 @@ function Admin({ defaultSection = "orders" }) {
                 Total Revenue
               </p>
               <p className="text-2xl font-bold text-yellow-400 mt-1">
-                ₹{Number(analytics.total_revenue || 0).toFixed(2)}
+                â‚¹{Number(analytics.total_revenue || 0).toFixed(2)}
               </p>
             </div>
 
@@ -970,10 +978,17 @@ function Admin({ defaultSection = "orders" }) {
           {orders.map((order) => (
             <div
               key={order.id}
+              data-new-order={
+                order.status === "pending" &&
+                order.created_at &&
+                Date.now() - new Date(order.created_at).getTime() < 6 * 60 * 1000
+              }
               className={`rounded-xl border p-4 mb-4 transition ${
                 order.status === "delivered"
                   ? "bg-white/5 border-green-500/30 opacity-75"
-                  : "bg-white/5 border-white/10"
+                  : Date.now() - new Date(order.created_at).getTime() < 6 * 60 * 1000 && order.status === "pending"
+                    ? "bg-white/5 border-yellow-400/50 shadow-[0_0_0_1px_rgba(250,204,21,0.18)]"
+                    : "bg-white/5 border-white/10"
               }`}
             >
               <div className={order.status === "delivered" ? "line-through decoration-green-500/70" : ""}>
@@ -982,7 +997,7 @@ function Admin({ defaultSection = "orders" }) {
                 </p>
 
                 <p className="text-gray-300">
-                  Amount: ₹{order.total_amount}
+                  Amount: ₹{Number(order.amount ?? order.total_amount ?? 0).toFixed(2)}
                 </p>
 
                 <p className="text-gray-300">
@@ -994,18 +1009,26 @@ function Admin({ defaultSection = "orders" }) {
                 </p>
 
                 <p className="text-gray-400 text-sm">
-                  User: {order.user?.username}
+                  User: {order.user_name || order.user?.username || "-"}
+                </p>
+
+                <p className="text-gray-400 text-sm">
+                  Hostel: {order.hostel || order.hostel_name || "-"}
+                </p>
+
+                <p className="text-gray-400 text-xs">
+                  Time: {order.created_at ? new Date(order.created_at).toLocaleString() : "-"}
                 </p>
 
                 <div className="mt-3 space-y-2">
                 {(order.items || []).map((item) => (
                   <div key={item.id} className="border-t border-white/5 pt-2">
                     <p className="text-gray-300 text-sm">
-                      {item.item_name || "Unnamed item"} • ₹{item.total_price}
+                      {item.item_name || "Unnamed item"} â€¢ â‚¹{item.total_price}
                     </p>
 
                     <p className="text-gray-500 text-xs">
-                      {item.mode || "-"} • {item.print_type === "single" ? "Single Side" : item.print_type === "double" ? "Double Side" : item.print_type || "-"} • Qty {item.quantity}
+                      {item.mode || "-"} â€¢ {item.print_type === "single" ? "Single Side" : item.print_type === "double" ? "Double Side" : item.print_type || "-"} â€¢ Qty {item.quantity}
                     </p>
 
                     {item.leave_date && (

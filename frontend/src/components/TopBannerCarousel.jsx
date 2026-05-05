@@ -78,15 +78,19 @@ function TopBannerCarousel() {
           href={banner.link}
           target={/^https?:\/\//i.test(banner.link) ? "_blank" : undefined}
           rel={/^https?:\/\//i.test(banner.link) ? "noreferrer" : undefined}
-          className="block"
+          className="banner-shell block"
         >
           {content}
         </a>
       ) : (
-        content
+        <div className="banner-shell">{content}</div>
       )}
 
       <style>{`
+        .banner-shell {
+          width: 100%;
+        }
+
         .banner-container {
           width: 100%;
           aspect-ratio: 3 / 1;
@@ -103,7 +107,15 @@ function TopBannerCarousel() {
 
         @media (min-width: 768px) {
           .banner-container {
-            aspect-ratio: 16 / 9;
+            aspect-ratio: 20 / 7;
+          }
+        }
+
+        @media (min-width: 1024px) {
+          .banner-shell {
+            max-width: 980px;
+            margin-left: auto;
+            margin-right: auto;
           }
         }
       `}</style>

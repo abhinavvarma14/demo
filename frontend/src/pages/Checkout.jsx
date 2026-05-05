@@ -5,6 +5,8 @@ import toast from "react-hot-toast"
 import { getApiErrorMessage } from "../utils/apiError"
 
 const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+const UPI_ID = "9052612456@axl"
+const UPI_NAME = "BatPrint"
 
 function Checkout() {
   const hostelOptions = [
@@ -19,18 +21,21 @@ function Checkout() {
 
   const navigate = useNavigate()
   const redirectTriggeredRef = useRef(false)
+  const [userName, setUserName] = useState("")
   const [deliveryType, setDeliveryType] = useState("hostel")
-  const [hostel, setHostel] = useState("Himalaya")
+  const [hostel, setHostel] = useState("")
   const [contact, setContact] = useState("")
   const [alternate, setAlternate] = useState("")
   const [total, setTotal] = useState(0)
   const [submitting, setSubmitting] = useState(false)
   const [orderId, setOrderId] = useState(null)
+  const [uniqueAmount, setUniqueAmount] = useState(0)
   const [upiLink, setUpiLink] = useState("")
   const [expiresAt, setExpiresAt] = useState("")
-  const [formError, setFormError] = useState("")
   const [timeLeft, setTimeLeft] = useState(0)
-  const [paymentStatus, setPaymentStatus] = useState("WAITING_FOR_PAYMENT")
+  const [paymentStatus, setPaymentStatus] = useState("pending")
+  const [orderState, setOrderState] = useState("form")
+  const [formError, setFormError] = useState("")
 
   const normalizePhoneInput = (value) => value.replace(/\D/g, "").slice(0, 10)
   const sessionExpired = Boolean(expiresAt) && timeLeft <= 0
@@ -46,11 +51,36 @@ function Checkout() {
     return `https://quickchart.io/qr?size=320&text=${encodeURIComponent(upiLink)}`
   }, [upiLink])
 
+  const resolvedUpiLink = useMemo(() => {
+    if (upiLink) return upiLink
+    if (!uniqueAmount) return ""
+    return `upi://pay?pa=${encodeURIComponent(UPI_ID)}&pn=${encodeURIComponent(UPI_NAME)}&am=${encodeURIComponent(uniqueAmount.toFixed(2))}&cu=INR`
+  }, [upiLink, uniqueAmount])
+
+  const loadOrderStatus = async (currentOrderId) => {
+    if (!currentOrderId) return
+    try {
+      const res = await API.get(`/order/status/${currentOrderId}`)
+      setPaymentStatus((res.data?.payment_status || res.data?.status || "pending").toLowerCase())
+      if (res.data?.expires_at) {
+        setExpiresAt(res.data.expires_at)
+      }
+      if ((res.data?.payment_status || "").toUpperCase() === "SUCCESS" || (res.data?.status || "").toLowerCase() === "success") {
+        setOrderState("success")
+      }
+      if ((res.data?.payment_status || "").toUpperCase() === "FAILED" || (res.data?.status || "").toLowerCase() === "failed") {
+        setOrderState("failed")
+      }
+    } catch (error) {
+      console.log(error)
+    }
+  }
+
   useEffect(() => {
     const loadCartTotal = async () => {
       try {
         const res = await API.get("/cart")
-        setTotal(res.data.total_amount)
+        setTotal(Number(res.data.total_amount || 0))
       } catch (error) {
         console.log(error)
         if (error.response?.status === 401) {
@@ -73,7 +103,7 @@ function Checkout() {
 
     const updateTime = () => {
       const expiresAtMs = new Date(expiresAt).getTime()
-      const diff = Math.max(0, Math.floor((expiresAtMs - Date.now()) / 1000))
+      const diff = Math.max(0, Math.floor((expiresAtMs - Date.now()) / 1000) - 60)
       setTimeLeft(diff)
     }
 
@@ -87,261 +117,337 @@ function Checkout() {
       return undefined
     }
 
-    const pollStatus = async () => {
-      try {
-        const res = await API.get("/my-orders")
-        const currentOrder = (res.data || []).find((order) => order.id === orderId)
-        if (!currentOrder) {
-          return
-        }
-        setPaymentStatus(currentOrder.payment_status || "WAITING_FOR_PAYMENT")
-        if (currentOrder.expires_at) {
-          setExpiresAt(currentOrder.expires_at)
-        }
-      } catch (error) {
-        console.log(error)
-      }
-    }
-
-    pollStatus()
-    const interval = window.setInterval(pollStatus, 7000)
+    loadOrderStatus(orderId)
+    const interval = window.setInterval(() => loadOrderStatus(orderId), 5000)
     return () => window.clearInterval(interval)
   }, [orderId])
 
   useEffect(() => {
-    if (!isMobile || !upiLink || redirectTriggeredRef.current || paymentStatus === "FAILED") {
+    if (!isMobile || !resolvedUpiLink || redirectTriggeredRef.current || orderState === "failed") {
       return
     }
     redirectTriggeredRef.current = true
-    window.location.href = upiLink
-  }, [upiLink, paymentStatus])
+    window.location.href = resolvedUpiLink
+  }, [resolvedUpiLink, orderState])
 
-  useEffect(() => {
-    if (paymentStatus === "SUCCESS" || paymentStatus === "LATE_SUCCESS") {
-      toast.success("Payment confirmed")
-      navigate("/orders")
+  const validateInputs = () => {
+    if (!userName.trim()) {
+      return "Please enter your name"
     }
-  }, [navigate, paymentStatus])
+    if (!contact.trim()) {
+      return "Contact number is required"
+    }
+    if (!/^\d{10}$/.test(contact)) {
+      return "Contact number must be exactly 10 digits"
+    }
+    if (alternate && !/^\d{10}$/.test(alternate)) {
+      return "Alternate number must be exactly 10 digits"
+    }
+    if (deliveryType === "hostel" && !hostel.trim()) {
+      return "Please select a hostel"
+    }
+    if (!total || total <= 0) {
+      return "Cart total is empty"
+    }
+    return ""
+  }
 
-  const handlePay = async () => {
-    setFormError("")
+  const startPayment = async () => {
+    const validationMessage = validateInputs()
+    if (validationMessage) {
+      setFormError(validationMessage)
+      toast.error(validationMessage)
+      return
+    }
+
     if (!localStorage.getItem("token")) {
       toast.error("Please login to continue")
       navigate("/login")
       return
     }
 
-    if (deliveryType === "hostel" && !hostel.trim()) {
-      toast.error("Please enter hostel name")
-      return
-    }
-
-    if (!contact.trim()) {
-      setFormError("Contact number is required")
-      toast.error("Contact number is required")
-      return
-    }
-
-    if (!/^\d{10}$/.test(contact)) {
-      setFormError("Contact number must be exactly 10 digits")
-      toast.error("Contact number must be exactly 10 digits")
-      return
-    }
-
-    if (alternate && !/^\d{10}$/.test(alternate)) {
-      setFormError("Alternate number must be exactly 10 digits")
-      toast.error("Alternate number must be exactly 10 digits")
-      return
-    }
-
     try {
       setSubmitting(true)
+      setFormError("")
       redirectTriggeredRef.current = false
-      const orderRes = await API.post("/orders", {
+      setOrderState("paying")
+
+      const res = await API.post("/order/create", {
+        user_name: userName.trim(),
+        phone_number: contact.trim(),
+        hostel: deliveryType === "hostel" ? hostel : "Day Scholar",
         delivery_type: deliveryType,
-        hostel_name: deliveryType === "hostel" ? hostel : null,
-        contact_number: contact,
-        alternate_contact_number: alternate || null,
+        amount: Number(total),
+        alternate_number: alternate.trim() || null,
       })
 
-      setOrderId(orderRes.data.order_id)
-      setUpiLink(orderRes.data.upi_link || "")
-      setExpiresAt(orderRes.data.expires_at || "")
-      setPaymentStatus(orderRes.data.payment_status || "WAITING_FOR_PAYMENT")
-      toast.success("Payment session started")
-    } catch (error) {
-      console.log(error)
-      toast.error(getApiErrorMessage(error, "Unable to start payment"))
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  const handleRetryPayment = async () => {
-    if (!orderId) {
-      toast.error("Order not found. Please start again.")
-      return
-    }
-
-    try {
-      setSubmitting(true)
-      redirectTriggeredRef.current = false
-      const res = await API.post(`/regenerate-payment/${orderId}`)
+      setOrderId(res.data.order_id)
+      setUniqueAmount(Number(res.data.unique_amount || total))
       setUpiLink(res.data.upi_link || "")
       setExpiresAt(res.data.expires_at || "")
-      setPaymentStatus(res.data.payment_status || "WAITING_FOR_PAYMENT")
-      toast.success("Payment session renewed")
+      setPaymentStatus((res.data.payment_status || "pending").toLowerCase())
+      setOrderState("paying")
+      toast.success("Payment link ready")
     } catch (error) {
       console.log(error)
-      toast.error(getApiErrorMessage(error, "Failed to regenerate payment"))
+      setOrderState("form")
+      toast.error(getApiErrorMessage(error, "Unable to create payment order"))
     } finally {
       setSubmitting(false)
     }
   }
 
-  const renderStatus = () => {
-    if (paymentStatus === "VERIFYING_PAYMENT") {
-      return "Verifying your payment..."
+  const checkAgain = async () => {
+    if (!orderId) {
+      toast.error("Order not found")
+      return
     }
-    if (paymentStatus === "FAILED" || sessionExpired) {
-      return "Session expired"
+    try {
+      setSubmitting(true)
+      await loadOrderStatus(orderId)
+      toast.success("Checking payment status again")
+    } finally {
+      setSubmitting(false)
     }
-    return "Waiting for payment confirmation..."
+  }
+
+  const openUpiApp = () => {
+    if (!resolvedUpiLink) {
+      toast.error("Payment link not ready yet")
+      return
+    }
+    window.location.href = resolvedUpiLink
   }
 
   return (
-    <div className="pt-24 pb-28 px-4">
-      <h1 className="mb-6 text-2xl font-bold text-yellow-400">Checkout</h1>
+    <div className="px-4 pb-28 pt-24">
+        <h1 className="mb-6 text-2xl font-bold text-yellow-400">Checkout</h1>
 
-      <div className="mb-6">
-        <p className="mb-2 text-sm text-gray-400">Delivery Type</p>
-        <div className="flex gap-3">
-          <button
-            onClick={() => setDeliveryType("hostel")}
-            className={`rounded-xl border px-4 py-2 ${
-              deliveryType === "hostel"
-                ? "border-yellow-400 text-yellow-400"
-                : "border-white/10"
-            }`}
-          >
-            Hostel
-          </button>
+      <div className="rounded-[28px] border border-white/10 bg-[#111111] p-5 shadow-[0_24px_60px_rgba(0,0,0,0.28)] backdrop-blur-xl">
+        <div className="grid gap-4">
+          <div>
+            <p className="mb-2 text-sm text-white/55">Your Name</p>
+              <input
+                value={userName}
+                onChange={(event) => setUserName(event.target.value)}
+              placeholder="Enter name as per UPI"
+                className="w-full rounded-2xl border border-white/10 bg-black/20 p-3 text-white outline-none"
+              />
+          </div>
 
-          <button
-            onClick={() => setDeliveryType("dayscholar")}
-            className={`rounded-xl border px-4 py-2 ${
-              deliveryType === "dayscholar"
-                ? "border-yellow-400 text-yellow-400"
-                : "border-white/10"
-            }`}
-          >
-            Day Scholar
-          </button>
-        </div>
-      </div>
+          <div>
+            <p className="mb-2 text-sm text-white/55">Delivery Type</p>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setDeliveryType("hostel")}
+                className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
+                  deliveryType === "hostel"
+                    ? "border-yellow-400 bg-yellow-400 text-black"
+                    : "border-white/10 bg-white/5 text-white"
+                }`}
+              >
+                Hostel
+              </button>
+              <button
+                type="button"
+                onClick={() => setDeliveryType("dayscholar")}
+                className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
+                  deliveryType === "dayscholar"
+                    ? "border-yellow-400 bg-yellow-400 text-black"
+                    : "border-white/10 bg-white/5 text-white"
+                }`}
+              >
+                Day Scholar
+              </button>
+            </div>
+          </div>
 
-      {deliveryType === "hostel" && (
-        <div className="mb-4">
-          <p className="mb-2 text-sm text-gray-400">Hostel Name</p>
-          <select
-            value={hostel}
-            onChange={(e) => setHostel(e.target.value)}
-            className="w-full rounded-xl border border-white/10 bg-white/5 p-3"
-          >
-            {hostelOptions.map((option) => (
-              <option key={option} value={option} className="bg-black text-white">
-                {option}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
-
-      <div className="mb-4">
-        <p className="mb-2 text-sm text-gray-400">Contact Number</p>
-        <input
-          value={contact}
-          onChange={(e) => setContact(normalizePhoneInput(e.target.value))}
-          inputMode="numeric"
-          maxLength={10}
-          placeholder="Enter 10-digit number"
-          className="w-full rounded-xl border border-white/10 bg-white/5 p-3"
-        />
-      </div>
-
-      <div className="mb-6">
-        <p className="mb-2 text-sm text-gray-400">Alternate Number</p>
-        <input
-          value={alternate}
-          onChange={(e) => setAlternate(normalizePhoneInput(e.target.value))}
-          inputMode="numeric"
-          maxLength={10}
-          placeholder="Optional 10-digit number"
-          className="w-full rounded-xl border border-white/10 bg-white/5 p-3"
-        />
-      </div>
-
-      <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-        <p className="text-sm text-gray-400">Cart Total</p>
-        <p className="text-2xl font-bold text-yellow-400">Rs {Number(total || 0).toFixed(2)}</p>
-      </div>
-
-      <button
-        onClick={handlePay}
-        disabled={submitting || total <= 0 || Boolean(orderId && !sessionExpired && paymentStatus !== "FAILED")}
-        className="mt-6 w-full rounded-xl bg-yellow-400 py-3 font-semibold text-black transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-60"
-      >
-        {submitting ? "Starting Payment..." : orderId && !sessionExpired && paymentStatus !== "FAILED" ? "Payment Session Active" : "Confirm Address"}
-      </button>
-
-      {formError && (
-        <p className="mt-3 text-sm font-medium text-red-500">{formError}</p>
-      )}
-
-      {orderId && (
-        <div className="mt-6 rounded-2xl border border-yellow-400/20 bg-white/5 p-4 backdrop-blur">
-          {isMobile ? (
-            <>
-              <h2 className="text-xl font-bold text-yellow-400">Redirecting to payment app...</h2>
-              <p className="mt-2 text-sm text-gray-300">Complete payment in your UPI app</p>
-            </>
-          ) : (
-            <>
-              <h2 className="text-xl font-bold text-yellow-400">Scan using any UPI app</h2>
-              <div className="mt-4 flex justify-center">
-                <div className="overflow-hidden rounded-2xl border border-white/10 bg-white p-3">
-                  <img
-                    src={qrCodeUrl}
-                    alt="UPI QR Code"
-                    className="h-64 w-64"
-                  />
-                </div>
-              </div>
-            </>
-          )}
-
-          {!sessionExpired && paymentStatus !== "FAILED" && (
-            <div className="mt-4 rounded-xl border border-white/10 bg-black/20 p-4 text-center">
-              <p className="text-sm text-gray-400">Session Expires In</p>
-              <p className="mt-2 text-3xl font-bold text-white">{formattedTimeLeft}</p>
+          {deliveryType === "hostel" && (
+            <div>
+              <p className="mb-2 text-sm text-white/55">Hostel</p>
+              <select
+                value={hostel}
+                onChange={(event) => setHostel(event.target.value)}
+                className="w-full rounded-2xl border border-white/10 bg-black/20 p-3 text-white outline-none"
+              >
+                <option value="" className="bg-black text-white">
+                  Select hostel
+                </option>
+                {hostelOptions.map((option) => (
+                  <option key={option} value={option} className="bg-black text-white">
+                    {option}
+                  </option>
+                ))}
+              </select>
             </div>
           )}
 
-          <p className="mt-4 text-center text-sm text-gray-300">
-            {renderStatus()}
-          </p>
+          <div>
+            <p className="mb-2 text-sm text-white/55">Contact Number</p>
+            <input
+              value={contact}
+              onChange={(event) => setContact(normalizePhoneInput(event.target.value))}
+              inputMode="numeric"
+              maxLength={10}
+              placeholder="Enter 10-digit number"
+              className="w-full rounded-2xl border border-white/10 bg-black/20 p-3 text-white outline-none"
+            />
+          </div>
 
-          {(sessionExpired || paymentStatus === "FAILED") && (
-            <button
-              onClick={handleRetryPayment}
-              disabled={submitting}
-              className="mt-4 w-full rounded-xl bg-yellow-400 py-3 font-semibold text-black transition hover:bg-yellow-300 disabled:opacity-60"
-            >
-              {submitting ? "Retrying..." : "Retry Payment"}
-            </button>
-          )}
+          <div>
+            <p className="mb-2 text-sm text-white/55">Alternate Number</p>
+            <input
+              value={alternate}
+              onChange={(event) => setAlternate(normalizePhoneInput(event.target.value))}
+              inputMode="numeric"
+              maxLength={10}
+              placeholder="Optional 10-digit number"
+              className="w-full rounded-2xl border border-white/10 bg-black/20 p-3 text-white outline-none"
+            />
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+            <p className="text-sm text-white/55">Cart Total</p>
+            <p className="text-2xl font-semibold text-yellow-400">₹{Number(total || 0).toFixed(2)}</p>
+            {uniqueAmount > 0 && orderState !== "form" && (
+              <p className="mt-1 text-xs text-white/55">
+                Unique amount: ₹{uniqueAmount.toFixed(2)}
+              </p>
+            )}
+          </div>
+
+          {formError && <p className="text-sm font-medium text-red-500">{formError}</p>}
         </div>
-      )}
+
+        {orderState === "form" && (
+          <button
+            onClick={startPayment}
+            disabled={submitting || total <= 0}
+            className="mt-5 w-full rounded-xl bg-yellow-400 py-3 font-semibold text-black transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {submitting ? "Creating Payment..." : "Pay"}
+          </button>
+        )}
+
+          {orderState === "paying" && (
+            <div className="mt-5 space-y-4 rounded-[24px] border border-white/10 bg-white/5 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-xl font-semibold text-white">Complete Your Payment</h2>
+                <p className="mt-1 text-sm text-white/65">Pay within 5 minutes</p>
+              </div>
+              <button
+                onClick={openUpiApp}
+                className="rounded-full border border-yellow-400/40 bg-yellow-400/10 px-4 py-2 text-sm font-semibold text-yellow-300"
+              >
+                Open UPI
+              </button>
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+              <p className="text-sm text-white/55">Amount to pay</p>
+              <p className="text-3xl font-bold text-yellow-400">₹{uniqueAmount > 0 ? uniqueAmount.toFixed(2) : Number(total || 0).toFixed(2)}</p>
+            </div>
+
+            {!sessionExpired && (
+              <div className="rounded-2xl border border-white/10 bg-black/20 p-4 text-center">
+                <p className="text-xs uppercase tracking-[0.28em] text-white/40">Countdown</p>
+                <p className="mt-2 text-3xl font-bold text-white">{formattedTimeLeft}</p>
+                <p className="mt-1 text-sm text-white/55">Backend accepts the payment for a little longer.</p>
+              </div>
+            )}
+
+            {sessionExpired && (
+              <div className="rounded-2xl border border-red-400/20 bg-red-400/10 p-4 text-center">
+                <p className="text-xs uppercase tracking-[0.28em] text-red-200/70">Expired</p>
+                <p className="mt-2 text-2xl font-bold text-red-200">Your 5-minute window has ended</p>
+                <p className="mt-1 text-sm text-red-100/75">The backend can still verify a late payment for a short grace period.</p>
+              </div>
+            )}
+
+            {isMobile ? (
+              <p className="text-sm text-white/65">
+                Your phone should open the default UPI app automatically. If it does not, tap the button again.
+              </p>
+            ) : (
+              <>
+                <div className="overflow-hidden rounded-2xl border border-white/10 bg-white p-3">
+                  {qrCodeUrl ? (
+                    <img src={qrCodeUrl} alt="UPI QR Code" className="mx-auto h-64 w-64" />
+                  ) : (
+                    <div className="flex h-64 items-center justify-center text-sm text-gray-500">
+                      QR will appear after the payment link is ready.
+                    </div>
+                  )}
+                </div>
+                <p className="text-center text-sm text-white/65">
+                  Scan with any UPI app
+                </p>
+              </>
+            )}
+
+            <p className="text-sm text-white/65">
+              Status: <span className="capitalize text-yellow-300">{paymentStatus}</span>
+            </p>
+
+            <div className="flex flex-wrap gap-3">
+              <button
+                onClick={checkAgain}
+                disabled={submitting}
+                className="rounded-xl border border-white/10 bg-white/10 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+              >
+                {submitting ? "Checking..." : "Paid already?"}
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate("/contact")}
+                className="rounded-xl border border-yellow-400/30 bg-yellow-400/10 px-4 py-2 text-sm font-semibold text-yellow-300"
+              >
+                Need help?
+              </button>
+            </div>
+          </div>
+        )}
+
+        {orderState === "success" && (
+          <div className="mt-5 rounded-[24px] border border-green-400/20 bg-green-400/10 p-5">
+            <h2 className="text-xl font-semibold text-green-300">Order Placed Successfully</h2>
+            <p className="mt-2 text-sm text-green-100/80">
+              Payment has been confirmed. We&apos;re preparing your order now.
+            </p>
+            <button
+              onClick={() => navigate("/orders")}
+              className="mt-4 rounded-xl bg-green-400 px-4 py-2 font-semibold text-black"
+            >
+              View Orders
+            </button>
+          </div>
+        )}
+
+        {orderState === "failed" && (
+          <div className="mt-5 rounded-[24px] border border-red-400/20 bg-red-400/10 p-5">
+            <h2 className="text-xl font-semibold text-red-300">Payment failed</h2>
+            <p className="mt-2 text-sm text-red-100/80">
+              The payment window expired or the backend could not confirm the payment yet.
+            </p>
+            <div className="mt-4 flex flex-wrap gap-3">
+              <button
+                onClick={() => navigate("/contact")}
+                className="rounded-xl bg-yellow-400 px-4 py-2 font-semibold text-black"
+              >
+                Paid already?
+              </button>
+              <button
+                onClick={openUpiApp}
+                className="rounded-xl border border-white/10 bg-white/10 px-4 py-2 font-semibold text-white"
+              >
+                Open UPI Again
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

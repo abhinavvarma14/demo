@@ -193,6 +193,36 @@ class PhonePeNotification(BaseModel):
     source: str
 
 
+class PhonePeOrderCreate(BaseModel):
+    user_name: str = Field(min_length=2, max_length=120)
+    phone_number: str = Field(min_length=10, max_length=10)
+    hostel: str = Field(min_length=2, max_length=120)
+    delivery_type: Literal["hostel", "dayscholar"] = "hostel"
+    amount: float = Field(gt=0)
+    alternate_number: Optional[str] = Field(default=None, min_length=10, max_length=10)
+    alternate_phone: Optional[str] = Field(default=None, min_length=10, max_length=10)
+
+    @field_validator("user_name", "hostel")
+    @classmethod
+    def validate_text(cls, value: str):
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Field is required")
+        return normalized
+
+    @field_validator("phone_number", "alternate_phone")
+    @classmethod
+    def validate_phone(cls, value: Optional[str]):
+        if value is None:
+            return value
+        normalized = value.strip()
+        if not normalized:
+            return None
+        if not normalized.isdigit() or len(normalized) != 10:
+            raise ValueError("Phone number must contain exactly 10 digits")
+        return normalized
+
+
 class CartItemUpdate(BaseModel):
     quantity: int = Field(gt=0)
 
