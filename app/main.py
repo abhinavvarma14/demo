@@ -3,9 +3,11 @@ import shutil
 import uuid
 import logging
 import base64
+import math
 import random
 import re
 import time
+from decimal import Decimal, InvalidOperation
 from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -750,8 +752,8 @@ def now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def generate_upi_link(amount: float) -> str:
-    return f"upi://pay?pa={UPI_ID}&pn={UPI_PAYEE_NAME}&am={amount:.2f}&cu=INR"
+def generate_upi_link(amount: float | int) -> str:
+    return f"upi://pay?pa={UPI_ID}&pn={UPI_PAYEE_NAME}&am={int(round(float(amount)))}&cu=INR"
 
 
 def expire_payment_if_needed(order: models.Order, db: Session) -> bool:
@@ -769,24 +771,31 @@ def expire_payment_if_needed(order: models.Order, db: Session) -> bool:
     return False
 
 
-def generate_unique_amount(base_amount: float, db: Session, exclude_order_id: int | None = None) -> float:
-    normalized_base = round(float(base_amount), 2)
+def generate_unique_amount(base_amount: float, db: Session, exclude_order_id: int | None = None) -> int:
+    normalized_base = max(0, math.ceil(float(base_amount)))
     current_time = now_utc()
 
-    for _ in range(50):
-        candidate = round(normalized_base + (random.randint(1, 99) / 100), 2)
-        query = db.query(models.Order.id).filter(
-            models.Order.unique_amount == candidate,
-            models.Order.payment_status == "WAITING_FOR_PAYMENT",
-            models.Order.expires_at.is_not(None),
-            models.Order.expires_at > current_time,
-        )
-        if exclude_order_id is not None:
-            query = query.filter(models.Order.id != exclude_order_id)
-        if not query.first():
-            return candidate
+    query = db.query(models.Order.unique_amount).filter(
+        models.Order.unique_amount.is_not(None),
+        models.Order.payment_status == "WAITING_FOR_PAYMENT",
+        models.Order.expires_at.is_not(None),
+        models.Order.expires_at > current_time,
+    )
+    if exclude_order_id is not None:
+        query = query.filter(models.Order.id != exclude_order_id)
 
-    raise HTTPException(status_code=503, detail="Unable to generate a unique payment amount")
+    active_amounts = set()
+    for (value,) in query.all():
+        try:
+            active_amounts.add(int(round(float(value))))
+        except (TypeError, ValueError):
+            continue
+
+    candidate = normalized_base + 1
+    while candidate in active_amounts:
+        candidate += 1
+
+    return candidate
 
 
 def start_order_payment_session(order: models.Order, db: Session) -> models.Order:
@@ -1924,7 +1933,15 @@ def receive_phonepe_notification(
     if not match:
         return {"status": "no amount"}
 
-    amount = float(match.group(1))
+    try:
+        extracted_amount = Decimal(match.group(1))
+    except InvalidOperation:
+        return {"status": "ignored"}
+
+    if extracted_amount != extracted_amount.to_integral_value():
+        return {"status": "ignored"}
+
+    amount = int(extracted_amount)
     sender_segment = raw_text.split("₹", 1)[0]
     sender_name = normalize_phonepe_text(
         sender_segment.splitlines()[0] if sender_segment.splitlines() else sender_segment
@@ -1946,7 +1963,7 @@ def receive_phonepe_notification(
     for order in candidate_orders:
         if order.unique_amount is None:
             continue
-        if abs(float(order.unique_amount) - amount) >= 0.01:
+        if int(round(float(order.unique_amount))) != amount:
             continue
 
         order_name = normalize_phonepe_text(order.user_name or (order.user.username if order.user else ""))

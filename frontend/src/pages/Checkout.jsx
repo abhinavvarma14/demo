@@ -25,24 +25,15 @@ function Checkout() {
   const [orderId, setOrderId] = useState(null)
   const [uniqueAmount, setUniqueAmount] = useState(0)
   const [upiLink, setUpiLink] = useState("")
-  const [expiresAt, setExpiresAt] = useState("")
-  const [timeLeft, setTimeLeft] = useState(0)
   const [paymentStatus, setPaymentStatus] = useState("pending")
   const [orderState, setOrderState] = useState("form")
   const [formError, setFormError] = useState("")
 
   const normalizePhoneInput = (value) => value.replace(/\D/g, "").slice(0, 10)
-  const sessionExpired = Boolean(expiresAt) && timeLeft <= 0
   const paymentAmount = useMemo(
-    () => Number(uniqueAmount > 0 ? uniqueAmount : Number(total || 0)).toFixed(2),
+    () => Math.max(1, Math.round(Number(uniqueAmount > 0 ? uniqueAmount : Number(total || 0)))),
     [total, uniqueAmount]
   )
-
-  const formattedTimeLeft = useMemo(() => {
-    const minutes = Math.floor(timeLeft / 60)
-    const seconds = timeLeft % 60
-    return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
-  }, [timeLeft])
 
   const qrCodeUrl = useMemo(() => {
     if (!upiLink) return ""
@@ -51,8 +42,7 @@ function Checkout() {
 
   const resolvedUpiLink = useMemo(() => {
     if (upiLink) return upiLink
-    if (!paymentAmount) return ""
-    return `upi://pay?pa=${encodeURIComponent(UPI_ID)}&pn=${encodeURIComponent(UPI_NAME)}&am=${encodeURIComponent(paymentAmount)}&cu=INR`
+    return `upi://pay?pa=${encodeURIComponent(UPI_ID)}&pn=${encodeURIComponent(UPI_NAME)}&am=${encodeURIComponent(String(paymentAmount))}&cu=INR`
   }, [paymentAmount, upiLink])
 
   const copyToClipboard = async (value, label) => {
@@ -71,9 +61,6 @@ function Checkout() {
       const res = await API.get(`/order/status/${currentOrderId}`)
       const nextStatus = (res.data?.payment_status || res.data?.status || "pending").toLowerCase()
       setPaymentStatus(nextStatus)
-      if (res.data?.expires_at) {
-        setExpiresAt(res.data.expires_at)
-      }
       if (nextStatus === "success") {
         setOrderState("success")
       }
@@ -105,23 +92,6 @@ function Checkout() {
   }, [navigate])
 
   useEffect(() => {
-    if (!expiresAt) {
-      setTimeLeft(0)
-      return undefined
-    }
-
-    const updateTime = () => {
-      const expiresAtMs = new Date(expiresAt).getTime()
-      const diff = Math.max(0, Math.floor((expiresAtMs - Date.now()) / 1000) - 60)
-      setTimeLeft(diff)
-    }
-
-    updateTime()
-    const interval = window.setInterval(updateTime, 1000)
-    return () => window.clearInterval(interval)
-  }, [expiresAt])
-
-  useEffect(() => {
     if (!orderId || orderState === "success" || orderState === "failed") {
       return undefined
     }
@@ -139,14 +109,6 @@ function Checkout() {
       window.clearInterval(interval)
     }
   }, [orderId, orderState])
-
-  useEffect(() => {
-    if (!isMobile || !resolvedUpiLink || redirectTriggeredRef.current || orderState === "failed") {
-      return
-    }
-    redirectTriggeredRef.current = true
-    window.location.href = resolvedUpiLink
-  }, [resolvedUpiLink, orderState])
 
   const validateInputs = () => {
     if (!userName.trim()) return "Please enter your name"
@@ -190,7 +152,6 @@ function Checkout() {
       setOrderId(res.data.order_id)
       setUniqueAmount(Number(res.data.unique_amount || total))
       setUpiLink(res.data.upi_link || "")
-      setExpiresAt(res.data.expires_at || "")
       setPaymentStatus((res.data.payment_status || "pending").toLowerCase())
       toast.success("Payment link ready")
     } catch (error) {
@@ -229,123 +190,113 @@ function Checkout() {
       <h1 className="mb-6 text-2xl font-bold text-yellow-400">Checkout</h1>
 
       <div className="rounded-[28px] border border-white/10 bg-[#111111] p-5 shadow-[0_24px_60px_rgba(0,0,0,0.28)] backdrop-blur-xl">
-        <div className="grid gap-4">
-          <div>
-            <p className="mb-2 text-sm text-white/55">Your Name</p>
-            <input
-              value={userName}
-              onChange={(event) => setUserName(event.target.value)}
-              placeholder="Enter name as per UPI"
-              className="w-full rounded-2xl border border-white/10 bg-black/20 p-3 text-white outline-none"
-            />
-          </div>
-
-          <div>
-            <p className="mb-2 text-sm text-white/55">Delivery Type</p>
-            <div className="flex gap-3">
-              <button
-                type="button"
-                onClick={() => setDeliveryType("hostel")}
-                className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
-                  deliveryType === "hostel"
-                    ? "border-yellow-400 bg-yellow-400 text-black"
-                    : "border-white/10 bg-white/5 text-white"
-                }`}
-              >
-                Hostel
-              </button>
-              <button
-                type="button"
-                onClick={() => setDeliveryType("dayscholar")}
-                className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
-                  deliveryType === "dayscholar"
-                    ? "border-yellow-400 bg-yellow-400 text-black"
-                    : "border-white/10 bg-white/5 text-white"
-                }`}
-              >
-                Day Scholar
-              </button>
-            </div>
-          </div>
-
-          {deliveryType === "hostel" && (
-            <div>
-              <p className="mb-2 text-sm text-white/55">Hostel</p>
-              <select
-                value={hostel}
-                onChange={(event) => setHostel(event.target.value)}
-                className="w-full rounded-2xl border border-white/10 bg-black/20 p-3 text-white outline-none"
-              >
-                <option value="" className="bg-black text-white">
-                  Select hostel
-                </option>
-                {hostelOptions.map((option) => (
-                  <option key={option} value={option} className="bg-black text-white">
-                    {option}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          <div>
-            <p className="mb-2 text-sm text-white/55">Contact Number</p>
-            <input
-              value={contact}
-              onChange={(event) => setContact(normalizePhoneInput(event.target.value))}
-              inputMode="numeric"
-              maxLength={10}
-              placeholder="Enter 10-digit number"
-              className="w-full rounded-2xl border border-white/10 bg-black/20 p-3 text-white outline-none"
-            />
-          </div>
-
-          <div>
-            <p className="mb-2 text-sm text-white/55">Alternate Number</p>
-            <input
-              value={alternate}
-              onChange={(event) => setAlternate(normalizePhoneInput(event.target.value))}
-              inputMode="numeric"
-              maxLength={10}
-              placeholder="Optional 10-digit number"
-              className="w-full rounded-2xl border border-white/10 bg-black/20 p-3 text-white outline-none"
-            />
-          </div>
-
-          <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-            <p className="text-sm text-white/55">Cart Total</p>
-            <p className="text-2xl font-semibold text-yellow-400">?{Number(total || 0).toFixed(2)}</p>
-            {uniqueAmount > 0 && orderState !== "form" && (
-              <p className="mt-1 text-xs text-white/55">Unique amount: ?{uniqueAmount.toFixed(2)}</p>
-            )}
-          </div>
-
-          {formError && <p className="text-sm font-medium text-red-500">{formError}</p>}
-        </div>
-
         {orderState === "form" && (
-          <button
-            onClick={startPayment}
-            disabled={submitting || total <= 0}
-            className="mt-5 w-full rounded-xl bg-yellow-400 py-3 font-semibold text-black transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {submitting ? "Creating Payment..." : "Pay"}
-          </button>
+          <div className="grid gap-4">
+            <div>
+              <p className="mb-2 text-sm text-white/55">Your Name</p>
+              <input
+                value={userName}
+                onChange={(event) => setUserName(event.target.value)}
+                placeholder="Enter name as per UPI"
+                className="w-full rounded-2xl border border-white/10 bg-black/20 p-3 text-white outline-none"
+              />
+            </div>
+
+            <div>
+              <p className="mb-2 text-sm text-white/55">Delivery Type</p>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setDeliveryType("hostel")}
+                  className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
+                    deliveryType === "hostel"
+                      ? "border-yellow-400 bg-yellow-400 text-black"
+                      : "border-white/10 bg-white/5 text-white"
+                  }`}
+                >
+                  Hostel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDeliveryType("dayscholar")}
+                  className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
+                    deliveryType === "dayscholar"
+                      ? "border-yellow-400 bg-yellow-400 text-black"
+                      : "border-white/10 bg-white/5 text-white"
+                  }`}
+                >
+                  Day Scholar
+                </button>
+              </div>
+            </div>
+
+            {deliveryType === "hostel" && (
+              <div>
+                <p className="mb-2 text-sm text-white/55">Hostel</p>
+                <select
+                  value={hostel}
+                  onChange={(event) => setHostel(event.target.value)}
+                  className="w-full rounded-2xl border border-white/10 bg-black/20 p-3 text-white outline-none"
+                >
+                  <option value="" className="bg-black text-white">
+                    Select hostel
+                  </option>
+                  {hostelOptions.map((option) => (
+                    <option key={option} value={option} className="bg-black text-white">
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            <div>
+              <p className="mb-2 text-sm text-white/55">Contact Number</p>
+              <input
+                value={contact}
+                onChange={(event) => setContact(normalizePhoneInput(event.target.value))}
+                inputMode="numeric"
+                maxLength={10}
+                placeholder="Enter 10-digit number"
+                className="w-full rounded-2xl border border-white/10 bg-black/20 p-3 text-white outline-none"
+              />
+            </div>
+
+            <div>
+              <p className="mb-2 text-sm text-white/55">Alternate Number</p>
+              <input
+                value={alternate}
+                onChange={(event) => setAlternate(normalizePhoneInput(event.target.value))}
+                inputMode="numeric"
+                maxLength={10}
+                placeholder="Optional 10-digit number"
+                className="w-full rounded-2xl border border-white/10 bg-black/20 p-3 text-white outline-none"
+              />
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+              <p className="text-sm text-white/55">Cart Total</p>
+              <p className="text-2xl font-semibold text-yellow-400">?{Math.round(Number(total || 0))}</p>
+            </div>
+
+            {formError && <p className="text-sm font-medium text-red-500">{formError}</p>}
+
+            <button
+              onClick={startPayment}
+              disabled={submitting || total <= 0}
+              className="w-full rounded-xl bg-yellow-400 py-3 font-semibold text-black transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {submitting ? "Creating Payment..." : "Confirm"}
+            </button>
+          </div>
         )}
 
         {orderState === "paying" && (
-          <div className="mt-5 space-y-4 rounded-[24px] border border-white/10 bg-white/5 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h2 className="text-lg font-semibold text-white">Complete Your Payment</h2>
-                <p className="mt-1 text-sm text-white/65">Pay within 5 minutes</p>
-              </div>
-              <button
-                onClick={openUpiApp}
-                className="rounded-full border border-yellow-400/40 bg-yellow-400/10 px-4 py-2 text-sm font-semibold text-yellow-300"
-              >
-                Open UPI
-              </button>
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-4 text-center">
+              <p className="text-xs uppercase tracking-[0.28em] text-white/40">Payment Ready</p>
+              <h2 className="mt-2 text-xl font-semibold text-white">Send exactly ?{paymentAmount}</h2>
+              <p className="mt-1 text-sm text-white/65">Pay within 5 minutes</p>
             </div>
 
             <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
@@ -353,39 +304,18 @@ function Checkout() {
               <p className="text-3xl font-bold text-yellow-400">?{paymentAmount}</p>
             </div>
 
-            {!sessionExpired && (
-              <div className="rounded-2xl border border-white/10 bg-black/20 p-4 text-center">
-                <p className="text-[11px] uppercase tracking-[0.28em] text-white/40">Countdown</p>
-                <p className="mt-2 text-2xl font-semibold text-white">{formattedTimeLeft}</p>
-                <p className="mt-1 text-xs text-white/55">Backend accepts the payment for a little longer.</p>
-              </div>
-            )}
-
-            {sessionExpired && (
-              <div className="rounded-2xl border border-red-400/20 bg-red-400/10 p-4 text-center">
-                <p className="text-xs uppercase tracking-[0.28em] text-red-200/70">Expired</p>
-                <p className="mt-2 text-2xl font-bold text-red-200">Your 5-minute window has ended</p>
-                <p className="mt-1 text-sm text-red-100/75">The backend can still verify a late payment for a short grace period.</p>
-              </div>
-            )}
-
             {isMobile ? (
-              <p className="text-sm text-white/65">
-                Your phone should open the default UPI app automatically. If it does not, tap the button again.
-              </p>
+              <p className="text-sm text-white/65">Tap the button below to open your UPI app manually.</p>
             ) : (
-              <>
-                <div className="overflow-hidden rounded-2xl border border-white/10 bg-white p-3">
-                  {qrCodeUrl ? (
-                    <img src={qrCodeUrl} alt="UPI QR Code" className="mx-auto h-64 w-64" />
-                  ) : (
-                    <div className="flex h-64 items-center justify-center text-sm text-gray-500">
-                      QR will appear after the payment link is ready.
-                    </div>
-                  )}
-                </div>
-                <p className="text-center text-sm text-white/65">Scan with any UPI app</p>
-              </>
+              <div className="overflow-hidden rounded-2xl border border-white/10 bg-white p-3">
+                {qrCodeUrl ? (
+                  <img src={qrCodeUrl} alt="UPI QR Code" className="mx-auto h-64 w-64" />
+                ) : (
+                  <div className="flex h-64 items-center justify-center text-sm text-gray-500">
+                    QR will appear after the payment link is ready.
+                  </div>
+                )}
+              </div>
             )}
 
             <p className="text-sm text-white/65">
@@ -410,6 +340,12 @@ function Checkout() {
             </div>
 
             <div className="flex flex-wrap gap-3">
+              <button
+                onClick={openUpiApp}
+                className="rounded-xl border border-yellow-400/30 bg-yellow-400/10 px-4 py-2 font-semibold text-yellow-300"
+              >
+                Open UPI App
+              </button>
               <button
                 onClick={checkAgain}
                 disabled={submitting}

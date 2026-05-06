@@ -563,7 +563,7 @@ function Admin({ defaultSection = "orders" }) {
                 Total Revenue
               </p>
               <p className="text-2xl font-bold text-yellow-400 mt-1">
-                â‚¹{Number(analytics.total_revenue || 0).toFixed(2)}
+                ₹{Math.round(Number(analytics.total_revenue || 0))}
               </p>
             </div>
 
@@ -997,7 +997,7 @@ function Admin({ defaultSection = "orders" }) {
                 </p>
 
                 <p className="text-gray-300">
-                  Amount: ₹{Number(order.amount ?? order.total_amount ?? 0).toFixed(2)}
+                  Amount: ₹{Math.round(Number(order.amount ?? order.total_amount ?? 0))}
                 </p>
 
                 <p className="text-gray-300">
