@@ -1,26 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
-import API from "../api/api"
 import toast from "react-hot-toast"
+
+import API from "../api/api"
 import { getApiErrorMessage } from "../utils/apiError"
 
 const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
-const UPI_ID = "9052612456@axl"
+const UPI_ID = "9052612456-3@ybl"
 const UPI_NAME = "BatPrint"
 
 function Checkout() {
-  const hostelOptions = [
-    "Himalaya",
-    "Lotus",
-    "Tulip",
-    "Aravali",
-    "Vindhya",
-    "Kailash",
-    "Outside Hostel",
-  ]
+  const hostelOptions = ["Himalaya", "Lotus", "Tulip", "Aravali", "Vindhya", "Kailash", "Outside Hostel"]
 
   const navigate = useNavigate()
   const redirectTriggeredRef = useRef(false)
+
   const [userName, setUserName] = useState("")
   const [deliveryType, setDeliveryType] = useState("hostel")
   const [hostel, setHostel] = useState("")
@@ -39,6 +33,10 @@ function Checkout() {
 
   const normalizePhoneInput = (value) => value.replace(/\D/g, "").slice(0, 10)
   const sessionExpired = Boolean(expiresAt) && timeLeft <= 0
+  const paymentAmount = useMemo(
+    () => Number(uniqueAmount > 0 ? uniqueAmount : Number(total || 0)).toFixed(2),
+    [total, uniqueAmount]
+  )
 
   const formattedTimeLeft = useMemo(() => {
     const minutes = Math.floor(timeLeft / 60)
@@ -53,22 +51,33 @@ function Checkout() {
 
   const resolvedUpiLink = useMemo(() => {
     if (upiLink) return upiLink
-    if (!uniqueAmount) return ""
-    return `upi://pay?pa=${encodeURIComponent(UPI_ID)}&pn=${encodeURIComponent(UPI_NAME)}&am=${encodeURIComponent(uniqueAmount.toFixed(2))}&cu=INR`
-  }, [upiLink, uniqueAmount])
+    if (!paymentAmount) return ""
+    return `upi://pay?pa=${encodeURIComponent(UPI_ID)}&pn=${encodeURIComponent(UPI_NAME)}&am=${encodeURIComponent(paymentAmount)}&cu=INR`
+  }, [paymentAmount, upiLink])
+
+  const copyToClipboard = async (value, label) => {
+    try {
+      await navigator.clipboard.writeText(String(value))
+      toast.success(`${label} copied`)
+    } catch (error) {
+      console.log(error)
+      toast.error(`Unable to copy ${label.toLowerCase()}`)
+    }
+  }
 
   const loadOrderStatus = async (currentOrderId) => {
     if (!currentOrderId) return
     try {
       const res = await API.get(`/order/status/${currentOrderId}`)
-      setPaymentStatus((res.data?.payment_status || res.data?.status || "pending").toLowerCase())
+      const nextStatus = (res.data?.payment_status || res.data?.status || "pending").toLowerCase()
+      setPaymentStatus(nextStatus)
       if (res.data?.expires_at) {
         setExpiresAt(res.data.expires_at)
       }
-      if ((res.data?.payment_status || "").toUpperCase() === "SUCCESS" || (res.data?.status || "").toLowerCase() === "success") {
+      if (nextStatus === "success") {
         setOrderState("success")
       }
-      if ((res.data?.payment_status || "").toUpperCase() === "FAILED" || (res.data?.status || "").toLowerCase() === "failed") {
+      if (nextStatus === "failed") {
         setOrderState("failed")
       }
     } catch (error) {
@@ -113,14 +122,23 @@ function Checkout() {
   }, [expiresAt])
 
   useEffect(() => {
-    if (!orderId) {
+    if (!orderId || orderState === "success" || orderState === "failed") {
       return undefined
     }
 
-    loadOrderStatus(orderId)
-    const interval = window.setInterval(() => loadOrderStatus(orderId), 5000)
-    return () => window.clearInterval(interval)
-  }, [orderId])
+    let active = true
+    const refresh = async () => {
+      if (!active) return
+      await loadOrderStatus(orderId)
+    }
+
+    refresh()
+    const interval = window.setInterval(refresh, 5000)
+    return () => {
+      active = false
+      window.clearInterval(interval)
+    }
+  }, [orderId, orderState])
 
   useEffect(() => {
     if (!isMobile || !resolvedUpiLink || redirectTriggeredRef.current || orderState === "failed") {
@@ -131,24 +149,12 @@ function Checkout() {
   }, [resolvedUpiLink, orderState])
 
   const validateInputs = () => {
-    if (!userName.trim()) {
-      return "Please enter your name"
-    }
-    if (!contact.trim()) {
-      return "Contact number is required"
-    }
-    if (!/^\d{10}$/.test(contact)) {
-      return "Contact number must be exactly 10 digits"
-    }
-    if (alternate && !/^\d{10}$/.test(alternate)) {
-      return "Alternate number must be exactly 10 digits"
-    }
-    if (deliveryType === "hostel" && !hostel.trim()) {
-      return "Please select a hostel"
-    }
-    if (!total || total <= 0) {
-      return "Cart total is empty"
-    }
+    if (!userName.trim()) return "Please enter your name"
+    if (!contact.trim()) return "Contact number is required"
+    if (!/^\d{10}$/.test(contact)) return "Contact number must be exactly 10 digits"
+    if (alternate && !/^\d{10}$/.test(alternate)) return "Alternate number must be exactly 10 digits"
+    if (deliveryType === "hostel" && !hostel.trim()) return "Please select a hostel"
+    if (!total || total <= 0) return "Cart total is empty"
     return ""
   }
 
@@ -186,7 +192,6 @@ function Checkout() {
       setUpiLink(res.data.upi_link || "")
       setExpiresAt(res.data.expires_at || "")
       setPaymentStatus((res.data.payment_status || "pending").toLowerCase())
-      setOrderState("paying")
       toast.success("Payment link ready")
     } catch (error) {
       console.log(error)
@@ -221,18 +226,18 @@ function Checkout() {
 
   return (
     <div className="px-4 pb-28 pt-24">
-        <h1 className="mb-6 text-2xl font-bold text-yellow-400">Checkout</h1>
+      <h1 className="mb-6 text-2xl font-bold text-yellow-400">Checkout</h1>
 
       <div className="rounded-[28px] border border-white/10 bg-[#111111] p-5 shadow-[0_24px_60px_rgba(0,0,0,0.28)] backdrop-blur-xl">
         <div className="grid gap-4">
           <div>
             <p className="mb-2 text-sm text-white/55">Your Name</p>
-              <input
-                value={userName}
-                onChange={(event) => setUserName(event.target.value)}
+            <input
+              value={userName}
+              onChange={(event) => setUserName(event.target.value)}
               placeholder="Enter name as per UPI"
-                className="w-full rounded-2xl border border-white/10 bg-black/20 p-3 text-white outline-none"
-              />
+              className="w-full rounded-2xl border border-white/10 bg-black/20 p-3 text-white outline-none"
+            />
           </div>
 
           <div>
@@ -309,11 +314,9 @@ function Checkout() {
 
           <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
             <p className="text-sm text-white/55">Cart Total</p>
-            <p className="text-2xl font-semibold text-yellow-400">₹{Number(total || 0).toFixed(2)}</p>
+            <p className="text-2xl font-semibold text-yellow-400">?{Number(total || 0).toFixed(2)}</p>
             {uniqueAmount > 0 && orderState !== "form" && (
-              <p className="mt-1 text-xs text-white/55">
-                Unique amount: ₹{uniqueAmount.toFixed(2)}
-              </p>
+              <p className="mt-1 text-xs text-white/55">Unique amount: ?{uniqueAmount.toFixed(2)}</p>
             )}
           </div>
 
@@ -330,11 +333,11 @@ function Checkout() {
           </button>
         )}
 
-          {orderState === "paying" && (
-            <div className="mt-5 space-y-4 rounded-[24px] border border-white/10 bg-white/5 p-4">
+        {orderState === "paying" && (
+          <div className="mt-5 space-y-4 rounded-[24px] border border-white/10 bg-white/5 p-4">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <h2 className="text-xl font-semibold text-white">Complete Your Payment</h2>
+                <h2 className="text-lg font-semibold text-white">Complete Your Payment</h2>
                 <p className="mt-1 text-sm text-white/65">Pay within 5 minutes</p>
               </div>
               <button
@@ -347,14 +350,14 @@ function Checkout() {
 
             <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
               <p className="text-sm text-white/55">Amount to pay</p>
-              <p className="text-3xl font-bold text-yellow-400">₹{uniqueAmount > 0 ? uniqueAmount.toFixed(2) : Number(total || 0).toFixed(2)}</p>
+              <p className="text-3xl font-bold text-yellow-400">?{paymentAmount}</p>
             </div>
 
             {!sessionExpired && (
               <div className="rounded-2xl border border-white/10 bg-black/20 p-4 text-center">
-                <p className="text-xs uppercase tracking-[0.28em] text-white/40">Countdown</p>
-                <p className="mt-2 text-3xl font-bold text-white">{formattedTimeLeft}</p>
-                <p className="mt-1 text-sm text-white/55">Backend accepts the payment for a little longer.</p>
+                <p className="text-[11px] uppercase tracking-[0.28em] text-white/40">Countdown</p>
+                <p className="mt-2 text-2xl font-semibold text-white">{formattedTimeLeft}</p>
+                <p className="mt-1 text-xs text-white/55">Backend accepts the payment for a little longer.</p>
               </div>
             )}
 
@@ -381,15 +384,30 @@ function Checkout() {
                     </div>
                   )}
                 </div>
-                <p className="text-center text-sm text-white/65">
-                  Scan with any UPI app
-                </p>
+                <p className="text-center text-sm text-white/65">Scan with any UPI app</p>
               </>
             )}
 
             <p className="text-sm text-white/65">
               Status: <span className="capitalize text-yellow-300">{paymentStatus}</span>
             </p>
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => copyToClipboard(UPI_ID, "UPI ID")}
+                className="rounded-xl border border-white/10 bg-white/10 px-3 py-2 text-sm font-semibold text-white"
+              >
+                Copy UPI ID
+              </button>
+              <button
+                type="button"
+                onClick={() => copyToClipboard(paymentAmount, "Amount")}
+                className="rounded-xl border border-white/10 bg-white/10 px-3 py-2 text-sm font-semibold text-white"
+              >
+                Copy Amount
+              </button>
+            </div>
 
             <div className="flex flex-wrap gap-3">
               <button
@@ -413,9 +431,7 @@ function Checkout() {
         {orderState === "success" && (
           <div className="mt-5 rounded-[24px] border border-green-400/20 bg-green-400/10 p-5">
             <h2 className="text-xl font-semibold text-green-300">Order Placed Successfully</h2>
-            <p className="mt-2 text-sm text-green-100/80">
-              Payment has been confirmed. We&apos;re preparing your order now.
-            </p>
+            <p className="mt-2 text-sm text-green-100/80">Payment has been confirmed. We&apos;re preparing your order now.</p>
             <button
               onClick={() => navigate("/orders")}
               className="mt-4 rounded-xl bg-green-400 px-4 py-2 font-semibold text-black"
@@ -428,15 +444,13 @@ function Checkout() {
         {orderState === "failed" && (
           <div className="mt-5 rounded-[24px] border border-red-400/20 bg-red-400/10 p-5">
             <h2 className="text-xl font-semibold text-red-300">Payment failed</h2>
-            <p className="mt-2 text-sm text-red-100/80">
-              The payment window expired or the backend could not confirm the payment yet.
-            </p>
+            <p className="mt-2 text-sm text-red-100/80">The payment window expired or the backend could not confirm the payment yet.</p>
             <div className="mt-4 flex flex-wrap gap-3">
               <button
                 onClick={() => navigate("/contact")}
                 className="rounded-xl bg-yellow-400 px-4 py-2 font-semibold text-black"
               >
-                Paid already?
+                Paid already? Contact support
               </button>
               <button
                 onClick={openUpiApp}

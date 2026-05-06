@@ -37,8 +37,8 @@ PDF_SINGLE_PRICE_PER_PAGE = 1.25
 PDF_SINGLE_BASE_CHARGE = 65.0
 PDF_DOUBLE_PRICE_PER_PAGE = 1.25
 PDF_DOUBLE_BASE_CHARGE = 65.0
-UPI_ID = "9052612456@axl"
-UPI_PAYEE_NAME = "BatPrint"
+UPI_ID = "9052612456-3@ybl"
+UPI_PAYEE_NAME = "name"
 PAYMENT_WINDOW_MINUTES = 6
 PAYMENT_LATE_BUFFER_MINUTES = 3
 
@@ -61,14 +61,14 @@ if _railway_public_domain:
     )
     _backend_origin = f"https://{_railway_public_domain}"
 else:
-    _backend_origin = "https://demo-1-tx9r.onrender.com"
+    _backend_origin = "https://demo-production-f9fb.up.railway.app"
 
 DEFAULT_CORS_ORIGINS = [
     "https://demo-ashy-sigma.vercel.app",
     "https://batprint.vercel.app",
     "https://www.batprint.vercel.app",
     # Backend origin (so same-domain tools/clients won't trip CORS).
-    # Uses the provider-provided domain when available; falls back to the current hardcoded domain.
+    # Uses the provider-provided domain when available; falls back to the current hardcoded Railway domain.
     _backend_origin,
     "http://localhost:5173",
     "http://localhost:3000",
