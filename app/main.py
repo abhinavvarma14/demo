@@ -5,7 +5,7 @@ import logging
 import base64
 import random
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from contextlib import asynccontextmanager
 from io import BytesIO
 from pathlib import Path
@@ -101,6 +101,8 @@ def build_cors_origins() -> list[str]:
 CORS_ORIGINS = build_cors_origins()
 CORS_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
 CORS_HEADERS = ["Accept", "Content-Type", "Authorization", "x-api-key", "X-Requested-With"]
+CORS_HEADER_VALUE = ", ".join(CORS_HEADERS)
+CORS_METHOD_VALUE = ", ".join(CORS_METHODS)
 
 UPLOAD_DIR = Path("app/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -140,15 +142,51 @@ app.add_middleware(
 logger.info("configured cors origins=%s", CORS_ORIGINS)
 
 
+def is_allowed_cors_origin(origin: str | None) -> bool:
+    if not origin:
+        return False
+
+    normalized_origin = origin.strip().rstrip("/")
+    if normalized_origin in CORS_ORIGINS:
+        return True
+
+    # Allow BatPrint Vercel preview deployments without using "*" with credentials.
+    return normalized_origin.startswith("https://batprint-") and normalized_origin.endswith(".vercel.app")
+
+
+def cors_response_headers(request: Request) -> dict[str, str]:
+    origin = request.headers.get("origin")
+    if not is_allowed_cors_origin(origin):
+        return {}
+
+    requested_headers = request.headers.get("access-control-request-headers")
+    return {
+        "Access-Control-Allow-Origin": origin.strip().rstrip("/"),
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Allow-Methods": CORS_METHOD_VALUE,
+        "Access-Control-Allow-Headers": requested_headers or CORS_HEADER_VALUE,
+        "Access-Control-Expose-Headers": "Content-Disposition",
+        "Access-Control-Max-Age": "86400",
+        "Vary": "Origin",
+    }
+
+
+@app.middleware("http")
+async def ensure_cors_headers(request: Request, call_next):
+    if request.method == "OPTIONS":
+        return Response(status_code=204, headers=cors_response_headers(request))
+
+    response = await call_next(request)
+    for key, value in cors_response_headers(request).items():
+        response.headers[key] = value
+    return response
+
+
 @app.options("/{full_path:path}", include_in_schema=False)
-def preflight_handler(full_path: str):
+def preflight_handler(full_path: str, request: Request):
     return Response(
         status_code=204,
-        headers={
-            "Access-Control-Allow-Methods": ", ".join(CORS_METHODS),
-            "Access-Control-Allow-Headers": ", ".join(CORS_HEADERS),
-            "Access-Control-Max-Age": "86400",
-        },
+        headers=cors_response_headers(request),
     )
 
 

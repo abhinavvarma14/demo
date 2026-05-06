@@ -69,7 +69,7 @@ try {
   const detail = error.response?.data?.detail
 
   if (!error.response) {
-    setFormError("Network issue. Please check your connection and try again.")
+    setFormError("Server connection blocked. Please try again after the backend CORS update is deployed.")
   } else if (status === 404) {
     setFormError("User not found. Please sign up.")
   } else if (status === 401 || status === 400) {
