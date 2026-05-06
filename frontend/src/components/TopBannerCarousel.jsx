@@ -13,6 +13,7 @@ const resolveBannerImage = (image) => {
 
 function TopBannerCarousel() {
   const [banners, setBanners] = useState([])
+  const [activeIndex, setActiveIndex] = useState(0)
   const mobileView = isMobileDevice()
 
   useEffect(() => {
@@ -44,8 +45,11 @@ function TopBannerCarousel() {
     return null
   }
 
-  const banner = preparedBanners[0]
+  const banner = preparedBanners[activeIndex] || preparedBanners[0]
   const clickable = banner.clickable && banner.link
+  const bannerLink = clickable
+    ? (/^https?:\/\//i.test(banner.link) ? banner.link : `https://${String(banner.link).replace(/^\/+/, "")}`)
+    : ""
   const content = (
     <div className="banner-container relative overflow-hidden rounded-2xl border border-white/10 bg-white/5">
       <img
@@ -75,15 +79,31 @@ function TopBannerCarousel() {
     <div className="mb-5">
       {clickable ? (
         <a
-          href={banner.link}
-          target={/^https?:\/\//i.test(banner.link) ? "_blank" : undefined}
-          rel={/^https?:\/\//i.test(banner.link) ? "noreferrer" : undefined}
+          href={bannerLink}
+          target="_blank"
+          rel="noopener noreferrer"
           className="banner-shell block"
         >
           {content}
         </a>
       ) : (
         <div className="banner-shell">{content}</div>
+      )}
+
+      {preparedBanners.length > 1 && (
+        <div className="mt-3 flex items-center justify-center gap-2">
+          {preparedBanners.map((item, index) => (
+            <button
+              key={item.id || index}
+              type="button"
+              onClick={() => setActiveIndex(index)}
+              aria-label={`Show banner ${index + 1}`}
+              className={`h-2.5 rounded-full transition ${
+                index === activeIndex ? "w-8 bg-yellow-400" : "w-2.5 bg-white/25"
+              }`}
+            />
+          ))}
+        </div>
       )}
 
       <style>{`

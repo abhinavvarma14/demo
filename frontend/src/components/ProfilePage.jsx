@@ -193,7 +193,7 @@ function ProfilePage() {
                 </p>
 
                 <div className="mt-3 flex flex-wrap gap-2">
-                  {["pending", "printing", "ready", "delivered"].map((status) => (
+                  {["pending_verification", "approved", "printing", "delivered"].map((status) => (
                     <span
                       key={status}
                       className={`rounded-full px-3 py-1 text-xs font-semibold ${

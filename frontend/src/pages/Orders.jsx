@@ -6,7 +6,7 @@ import { getApiErrorMessage } from "../utils/apiError"
 function Orders(){
   const [orders,setOrders] = useState([])
   const [loading, setLoading] = useState(true)
-  const statusSteps = ["pending", "printing", "ready", "delivered"]
+  const statusSteps = ["pending_verification", "approved", "printing", "delivered"]
 
   const fetchOrders = async () => {
     try {

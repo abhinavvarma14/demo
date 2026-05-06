@@ -77,7 +77,7 @@ function AppRoutes() {
                 path="/admin"
                 element={
                   <ProtectedRoute role="admin">
-                    <Admin defaultSection="orders" />
+                    <Admin defaultSection="verification" />
                   </ProtectedRoute>
                 }
               />
@@ -85,7 +85,7 @@ function AppRoutes() {
                 path="/admin/books"
                 element={
                   <ProtectedRoute role="admin">
-                    <Admin defaultSection="books" />
+                    <Admin defaultSection="verification" />
                   </ProtectedRoute>
                 }
               />
@@ -93,7 +93,7 @@ function AppRoutes() {
                 path="/admin/print-queue"
                 element={
                   <ProtectedRoute role="admin">
-                    <Admin defaultSection="printQueue" />
+                    <Admin defaultSection="printing" />
                   </ProtectedRoute>
                 }
               />

@@ -1,16 +1,34 @@
-﻿import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import API, { API_BASE_URL } from "../api/api"
 import toast from "react-hot-toast"
 import { getApiErrorMessage } from "../utils/apiError"
 
-function Admin({ defaultSection = "orders" }) {
+const tabs = [
+  ["verification", "Verification"],
+  ["printing", "Printing Queue"],
+  ["completed", "Completed"],
+  ["banners", "Banners"],
+]
+
+const formatAmount = (value) => `₹${Math.round(Number(value || 0))}`
+const submittedAt = (value) => (value ? new Date(value).toLocaleString() : "-")
+
+const normalizeLink = (value) => {
+  const trimmed = String(value || "").trim()
+  if (!trimmed) return ""
+  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed.replace(/^\/+/, "")}`
+}
+
+const orderAmount = (order) => order.amount ?? order.total_amount ?? 0
+const orderName = (order) => order.user_name || order.user?.username || "-"
+const orderPhone = (order) => order.phone_number || order.contact_number || "-"
+const orderHostel = (order) => order.hostel || order.hostel_name || "-"
+
+function Admin({ defaultSection = "verification" }) {
   const navigate = useNavigate()
   const [orders, setOrders] = useState([])
-  const [printSummary, setPrintSummary] = useState([])
-  const [books, setBooks] = useState([])
   const [banners, setBanners] = useState([])
-  const [supportThreads, setSupportThreads] = useState([])
   const [analytics, setAnalytics] = useState({
     total_orders: 0,
     pending_orders: 0,
@@ -18,18 +36,11 @@ function Admin({ defaultSection = "orders" }) {
     completed_orders: 0,
     total_revenue: 0,
   })
+  const [activeSection, setActiveSection] = useState(defaultSection === "orders" ? "verification" : defaultSection)
+  const [search, setSearch] = useState("")
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState("")
-  const [activeSection, setActiveSection] = useState(defaultSection)
-  const [newBook, setNewBook] = useState({ name: "", year: "", requires_details: false, is_pinned: false })
-  const [supportReplies, setSupportReplies] = useState({})
   const [editingBannerId, setEditingBannerId] = useState("")
-  const [newOption, setNewOption] = useState({
-    book_id: "",
-    mode: "",
-    print_type: "",
-    price: "",
-  })
   const [bannerForm, setBannerForm] = useState({
     title: "",
     subtitle: "",
@@ -40,317 +51,131 @@ function Admin({ defaultSection = "orders" }) {
   })
 
   useEffect(() => {
-    setActiveSection(defaultSection)
+    setActiveSection(defaultSection === "orders" ? "verification" : defaultSection)
   }, [defaultSection])
 
   const fetchOrders = async () => {
-    try {
-      const res = await API.get("/admin/orders")
-      setOrders(res.data)
-    } catch (err) {
-      console.log(err)
-      toast.error(getApiErrorMessage(err))
-    }
-  }
-
-  const fetchBooks = async () => {
-    try {
-      const res = await API.get("/admin/books")
-      setBooks(res.data)
-      if (!newOption.book_id && res.data.length > 0) {
-        setNewOption((current) => ({
-          ...current,
-          book_id: String(res.data[0].id),
-        }))
-      }
-    } catch (err) {
-      console.log(err)
-      toast.error(getApiErrorMessage(err))
-    }
-  }
-
-  const fetchPrintSummary = async () => {
-    try {
-      const res = await API.get("/admin/print-queue")
-      setPrintSummary(res.data)
-    } catch (err) {
-      console.log(err)
-      toast.error(getApiErrorMessage(err))
-    }
-  }
-
-  const fetchAnalytics = async () => {
-    try {
-      const res = await API.get("/admin/dashboard")
-      setAnalytics(res.data)
-    } catch (err) {
-      console.log(err)
-      toast.error(getApiErrorMessage(err))
-    }
-  }
-
-  const fetchSupportThreads = async () => {
-    try {
-      const res = await API.get("/admin/support-threads")
-      setSupportThreads(res.data)
-    } catch (err) {
-      console.log(err)
-      toast.error(getApiErrorMessage(err))
-    }
+    const res = await API.get("/admin/orders")
+    setOrders(res.data || [])
   }
 
   const fetchBanners = async () => {
+    const res = await API.get("/admin/banners")
+    setBanners(res.data || [])
+  }
+
+  const fetchAnalytics = async () => {
+    const res = await API.get("/admin/dashboard")
+    setAnalytics(res.data)
+  }
+
+  const refreshAdminData = async () => {
     try {
-      const res = await API.get("/admin/banners")
-      setBanners(res.data)
-    } catch (err) {
-      console.log(err)
-      toast.error(getApiErrorMessage(err))
+      await Promise.all([fetchOrders(), fetchBanners(), fetchAnalytics()])
+    } catch (error) {
+      console.log(error)
+      toast.error(getApiErrorMessage(error, "Failed to load admin data"))
     }
   }
 
   useEffect(() => {
     const load = async () => {
       setLoading(true)
-      await Promise.all([fetchOrders(), fetchBooks(), fetchBanners(), fetchPrintSummary(), fetchAnalytics(), fetchSupportThreads()])
+      await refreshAdminData()
       setLoading(false)
     }
-
     load()
-
-    const interval = window.setInterval(() => {
-      fetchOrders()
-      fetchPrintSummary()
-      fetchAnalytics()
-    }, 10000)
-
-    return () => window.clearInterval(interval)
+    // Initial admin load only; actions call refreshAdminData explicitly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const refreshAdminData = async () => {
-    await Promise.all([fetchOrders(), fetchBanners(), fetchPrintSummary(), fetchAnalytics(), fetchSupportThreads()])
+  const pendingSubmissions = useMemo(
+    () => orders.filter((order) => order.payment_status === "pending_verification" && (order.utr_number || order.transaction_id)),
+    [orders]
+  )
+
+  const printingOrders = useMemo(
+    () => orders.filter((order) => ["approved", "printing"].includes(order.payment_status)),
+    [orders]
+  )
+
+  const completedOrders = useMemo(
+    () => orders.filter((order) => order.payment_status === "delivered"),
+    [orders]
+  )
+
+  const filteredPending = useMemo(() => {
+    const term = search.trim().toLowerCase()
+    if (!term) return pendingSubmissions
+    return pendingSubmissions.filter((order) =>
+      [
+        order.utr_number,
+        order.utr,
+        order.transaction_id,
+        orderPhone(order),
+        orderName(order),
+      ]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(term))
+    )
+  }, [pendingSubmissions, search])
+
+  const goToSection = (section) => {
+    setActiveSection(section)
+    if (section === "printing") {
+      navigate("/admin/print-queue")
+      return
+    }
+    if (section === "banners") {
+      navigate("/admin/banners")
+      return
+    }
+    navigate("/admin")
   }
 
-  const updateStatus = async (id, status) => {
-
+  const updateStatus = async (orderId, status) => {
     try {
-      setActionLoading(`${id}-${status}`)
-
-      await API.put(`/admin/orders/${id}/status?status=${status}`)
+      setActionLoading(`${orderId}-${status}`)
+      await API.put(`/admin/orders/${orderId}/status?status=${status}`)
       toast.success("Order updated")
-
-      await refreshAdminData()
-
-    } catch (error) {
-      console.log(error)
-      toast.error(getApiErrorMessage(error, "Failed to update"))
-
-    } finally {
-      setActionLoading("")
-    }
-
-  }
-
-  const markAllPrinted = async () => {
-    try {
-      setActionLoading("print-complete")
-      await API.post("/admin/print-complete")
-      toast.success("Print summary reset")
       await refreshAdminData()
     } catch (error) {
       console.log(error)
-      toast.error(getApiErrorMessage(error, "Failed to mark all printed"))
+      toast.error(getApiErrorMessage(error, "Failed to update order"))
     } finally {
       setActionLoading("")
     }
   }
 
-  const resetRevenue = async () => {
+  const downloadExcel = async (path, filename) => {
     try {
-      setActionLoading("reset-revenue")
-      const res = await API.post("/admin/dashboard/reset-revenue")
-      setAnalytics((current) => ({
-        ...current,
-        total_revenue: res.data.total_revenue ?? 0,
-      }))
-      toast.success("Revenue reset")
+      setActionLoading(filename)
+      const res = await API.get(path, { responseType: "blob" })
+      const url = window.URL.createObjectURL(new Blob([res.data]))
+      const link = document.createElement("a")
+      link.href = url
+      link.setAttribute("download", filename)
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(url)
     } catch (error) {
       console.log(error)
-      toast.error(getApiErrorMessage(error, "Failed to reset revenue"))
+      toast.error(getApiErrorMessage(error, "Failed to export Excel"))
     } finally {
       setActionLoading("")
     }
   }
 
-  const startPrinting = async (item) => {
+  const deleteUploadedFile = async (itemId) => {
     try {
-      setActionLoading(`queue-start-${item.item_name}-${item.mode}-${item.print_type}`)
-      await API.post("/admin/print-queue/start", {
-        item_name: item.item_name,
-        mode: item.mode,
-        print_type: item.print_type,
-      })
-      toast.success("Printing started")
-      await refreshAdminData()
+      setActionLoading(`delete-file-${itemId}`)
+      await API.delete(`/admin/order-items/${itemId}/file`)
+      toast.success("Uploaded file deleted")
+      await fetchOrders()
     } catch (error) {
       console.log(error)
-      toast.error(getApiErrorMessage(error, "Failed to start printing"))
-    } finally {
-      setActionLoading("")
-    }
-  }
-
-  const markQueueItemPrinted = async (item) => {
-    try {
-      setActionLoading(`queue-complete-${item.item_name}-${item.mode}-${item.print_type}`)
-      await API.post("/admin/print-queue/complete", {
-        item_name: item.item_name,
-        mode: item.mode,
-        print_type: item.print_type,
-      })
-      toast.success("Queue item marked printed")
-      await refreshAdminData()
-    } catch (error) {
-      console.log(error)
-      toast.error(getApiErrorMessage(error, "Failed to mark queue item printed"))
-    } finally {
-      setActionLoading("")
-    }
-  }
-
-  const createBook = async () => {
-    if (!newBook.name || !newBook.year) {
-      toast.error("Enter book name and year")
-      return
-    }
-
-    try {
-      setActionLoading("create-book")
-      await API.post("/admin/books", newBook)
-      setNewBook({ name: "", year: "", requires_details: false, is_pinned: false })
-      await fetchBooks()
-      toast.success("Book created")
-    } catch (error) {
-      console.log(error)
-      toast.error(getApiErrorMessage(error, "Failed to create book"))
-    } finally {
-      setActionLoading("")
-    }
-  }
-
-  const createBookOption = async () => {
-    if (!newOption.book_id || !newOption.price) {
-      toast.error("Fill book and price")
-      return
-    }
-
-    try {
-      setActionLoading("create-option")
-      await API.post("/admin/book-options", {
-        book_id: Number(newOption.book_id),
-        mode: newOption.mode,
-        print_type: newOption.print_type,
-        price: Number(newOption.price),
-      })
-      setNewOption((current) => ({
-        ...current,
-        mode: "",
-        print_type: "",
-        price: "",
-      }))
-      await fetchBooks()
-      toast.success("Book option added")
-    } catch (error) {
-      console.log(error)
-      toast.error(getApiErrorMessage(error, "Failed to add option"))
-    } finally {
-      setActionLoading("")
-    }
-  }
-
-  const handleOptionChange = (bookId, optionId, field, value) => {
-    setBooks((currentBooks) =>
-      currentBooks.map((book) => {
-        if (book.id !== bookId) return book
-        return {
-          ...book,
-          options: (book.options || []).map((option) =>
-            option.id === optionId ? { ...option, [field]: value } : option
-          ),
-        }
-      })
-    )
-  }
-
-  const saveOption = async (bookId, option) => {
-    try {
-      setActionLoading(`save-option-${option.id}`)
-      await API.put(`/admin/book-options/${option.id}`, {
-        mode: option.mode,
-        print_type: option.print_type,
-        price: Number(option.price),
-      })
-      await fetchBooks()
-      toast.success("Option updated")
-    } catch (error) {
-      console.log(error)
-      toast.error(getApiErrorMessage(error, "Failed to update option"))
-    } finally {
-      setActionLoading("")
-    }
-  }
-
-  const deleteOption = async (optionId) => {
-    try {
-      setActionLoading(`delete-option-${optionId}`)
-      await API.delete(`/admin/book-options/${optionId}`)
-      await fetchBooks()
-      toast.success("Option deleted")
-    } catch (error) {
-      console.log(error)
-      toast.error(getApiErrorMessage(error, "Failed to delete option"))
-    } finally {
-      setActionLoading("")
-    }
-  }
-
-  const handleBookChange = (bookId, field, value) => {
-    setBooks((currentBooks) =>
-      currentBooks.map((book) =>
-        book.id === bookId ? { ...book, [field]: value } : book
-      )
-    )
-  }
-
-  const saveBook = async (book) => {
-    try {
-      setActionLoading(`save-book-${book.id}`)
-      await API.put(`/admin/books/${book.id}`, {
-        name: book.name,
-        year: book.year,
-        is_active: book.is_active,
-        requires_details: !!book.requires_details,
-        is_pinned: !!book.is_pinned,
-      })
-      await fetchBooks()
-      toast.success("Book updated")
-    } catch (error) {
-      console.log(error)
-      toast.error(getApiErrorMessage(error, "Failed to update book"))
-    } finally {
-      setActionLoading("")
-    }
-  }
-
-  const deleteBook = async (bookId) => {
-    try {
-      setActionLoading(`delete-book-${bookId}`)
-      await API.delete(`/admin/books/${bookId}`)
-      await fetchBooks()
-      toast.success("Book deleted")
-    } catch (error) {
-      console.log(error)
-      toast.error(getApiErrorMessage(error, "Failed to delete book"))
+      toast.error(getApiErrorMessage(error, "Failed to delete uploaded file"))
     } finally {
       setActionLoading("")
     }
@@ -377,12 +202,10 @@ function Admin({ defaultSection = "orders" }) {
     try {
       setActionLoading(editingBannerId ? `banner-save-${editingBannerId}` : "banner-create")
       const formData = new FormData()
-      if (bannerForm.image) {
-        formData.append("image", bannerForm.image)
-      }
+      if (bannerForm.image) formData.append("image", bannerForm.image)
       formData.append("title", bannerForm.title)
       formData.append("subtitle", bannerForm.subtitle)
-      formData.append("link", bannerForm.link)
+      formData.append("link", normalizeLink(bannerForm.link))
       formData.append("clickable", String(bannerForm.clickable))
       formData.append("active", String(bannerForm.active))
 
@@ -422,7 +245,7 @@ function Admin({ defaultSection = "orders" }) {
       const formData = new FormData()
       formData.append("title", banner.title || "")
       formData.append("subtitle", banner.subtitle || "")
-      formData.append("link", banner.link || "")
+      formData.append("link", normalizeLink(banner.link))
       formData.append("clickable", String(!!banner.clickable))
       formData.append("active", String(!banner.active))
       await API.put(`/api/banners/${banner.id}`, formData)
@@ -441,9 +264,7 @@ function Admin({ defaultSection = "orders" }) {
       setActionLoading(`banner-delete-${bannerId}`)
       await API.delete(`/api/banners/${bannerId}`)
       await fetchBanners()
-      if (editingBannerId === bannerId) {
-        resetBannerForm()
-      }
+      if (editingBannerId === bannerId) resetBannerForm()
       toast.success("Banner deleted")
     } catch (error) {
       console.log(error)
@@ -453,989 +274,291 @@ function Admin({ defaultSection = "orders" }) {
     }
   }
 
-  const deleteUploadedFile = async (itemId) => {
-    try {
-      setActionLoading(`delete-file-${itemId}`)
-      await API.delete(`/admin/order-items/${itemId}/file`)
-      toast.success("Uploaded file deleted")
-      await fetchOrders()
-    } catch (error) {
-      console.log(error)
-      toast.error(getApiErrorMessage(error, "Failed to delete uploaded file"))
-    } finally {
-      setActionLoading("")
-    }
-  }
-
-  const replyToSupportThread = async (threadId) => {
-    const message = (supportReplies[threadId] || "").trim()
-    if (!message) {
-      toast.error("Enter a reply")
-      return
-    }
-
-    try {
-      setActionLoading(`support-reply-${threadId}`)
-      const res = await API.post(`/admin/support-threads/${threadId}/reply`, {
-        message,
-      })
-      setSupportThreads((current) =>
-        current.map((thread) => (thread.id === threadId ? res.data : thread))
-      )
-      setSupportReplies((current) => ({ ...current, [threadId]: "" }))
-      toast.success("Reply sent")
-    } catch (error) {
-      console.log(error)
-      toast.error(getApiErrorMessage(error, "Failed to reply"))
-    } finally {
-      setActionLoading("")
-    }
-  }
-
-  const bulkCopies = printSummary.reduce((sum, item) => sum + item.quantity, 0)
-
-  const goToSection = (section) => {
-    setActiveSection(section)
-    if (section === "books") {
-      navigate("/admin/books")
-      return
-    }
-    if (section === "banners") {
-      navigate("/admin/banners")
-      return
-    }
-    if (section === "printQueue") {
-      navigate("/admin/print-queue")
-      return
-    }
-    navigate("/admin")
-  }
-
-  return (
-
-    <div className="pt-24 px-4 pb-24">
-
-      <h1 className="text-2xl font-bold text-yellow-400 mb-6">
-        Admin Dashboard
-      </h1>
-
-      <div className="grid grid-cols-2 gap-3 mb-6">
-        <div className="bg-white/5 border border-white/10 rounded-xl p-4">
-          <p className="text-gray-400 text-sm">
-            Total Orders
-          </p>
-          <p className="text-2xl font-bold text-yellow-400 mt-1">
-            {analytics.total_orders}
-          </p>
-        </div>
-
-        <div className="bg-white/5 border border-white/10 rounded-xl p-4">
-          <p className="text-gray-400 text-sm">
-            Pending Orders
-          </p>
-          <p className="text-2xl font-bold text-yellow-400 mt-1">
-            {analytics.pending_orders}
-          </p>
-        </div>
-
-        <div className="bg-white/5 border border-white/10 rounded-xl p-4">
-          <p className="text-gray-400 text-sm">
-            Printing Orders
-          </p>
-          <p className="text-2xl font-bold text-yellow-400 mt-1">
-            {analytics.printing_orders}
-          </p>
-        </div>
-
-        <div className="bg-white/5 border border-white/10 rounded-xl p-4">
-          <p className="text-gray-400 text-sm">
-            Completed Orders
-          </p>
-          <p className="text-2xl font-bold text-yellow-400 mt-1">
-            {analytics.completed_orders}
-          </p>
-        </div>
-
-        <div className="bg-white/5 border border-white/10 rounded-xl p-4 col-span-2">
-          <div className="flex items-center justify-between gap-3">
+  const OrderItems = ({ order }) => (
+    <div className="mt-3 grid gap-2">
+      {(order.items || []).map((item) => (
+        <div key={item.id} className="rounded-lg border border-white/5 bg-black/20 p-3">
+          <div className="flex items-start justify-between gap-3">
             <div>
-              <p className="text-gray-400 text-sm">
-                Total Revenue
-              </p>
-              <p className="text-2xl font-bold text-yellow-400 mt-1">
-                ₹{Math.round(Number(analytics.total_revenue || 0))}
+              <p className="text-sm font-medium text-white">{item.item_name || "Unnamed item"}</p>
+              <p className="mt-1 text-xs text-white/45">
+                {item.mode || "-"} | {item.print_type === "single" ? "Single Side" : item.print_type === "double" ? "Double Side" : item.print_type || "-"} | Qty {item.quantity}
               </p>
             </div>
-
-            <button
-              onClick={resetRevenue}
-              disabled={actionLoading === "reset-revenue"}
-              className="rounded-xl bg-white/10 px-4 py-2 text-sm font-semibold text-white"
-            >
-              {actionLoading === "reset-revenue" ? "Processing..." : "Reset Revenue"}
-            </button>
+            <span className="text-sm font-semibold text-yellow-300">{formatAmount(item.total_price)}</span>
           </div>
-        </div>
-
-        <div className="bg-white/5 border border-white/10 rounded-xl p-4 col-span-2">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-gray-400 text-sm">
-                Bulk Print Summary
-              </p>
-              <p className="text-2xl font-bold text-yellow-400 mt-1">
-                {bulkCopies}
-              </p>
-            </div>
-
-            <button
-              onClick={markAllPrinted}
-              disabled={actionLoading === "print-complete"}
-              className="bg-yellow-400 text-black px-4 py-2 rounded-xl font-semibold"
-            >
-              {actionLoading === "print-complete" ? "Processing..." : "Mark Printed"}
-            </button>
-          </div>
-
-          <div className="mt-4 overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="text-gray-400">
-                  <th className="pb-2 font-normal">
-                    Book Name
-                  </th>
-                  <th className="pb-2 font-normal">
-                    Mode
-                  </th>
-                  <th className="pb-2 font-normal">
-                    Print Type
-                  </th>
-                  <th className="pb-2 font-normal">
-                    Total Copies
-                  </th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {printSummary.length === 0 && (
-                  <tr>
-                    <td colSpan="4" className="py-3 text-gray-500">
-                      No pending bulk print items
-                    </td>
-                  </tr>
-                )}
-
-                {printSummary.map((item) => (
-                  <tr key={`${item.item_name}-${item.mode}-${item.print_type}`} className="border-t border-white/5">
-                    <td className="py-3 text-gray-300">
-                      {item.item_name}
-                    </td>
-                    <td className="py-3 text-gray-400">
-                      {item.mode || "-"}
-                    </td>
-                    <td className="py-3 text-gray-400">
-                      {item.print_type === "single" ? "Single" : item.print_type === "double" ? "Double" : item.print_type || "-"}
-                    </td>
-                    <td className="py-3 text-yellow-400">
-                      {item.quantity}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-      {loading && (
-        <div className="bg-white/5 border border-white/10 rounded-xl p-4 mb-6 h-40 animate-pulse" />
-      )}
-
-      {!loading && <div className="flex gap-3 mb-6">
-        <button
-          onClick={() => goToSection("books")}
-          className={`flex-1 py-3 rounded-xl border transition ${
-            activeSection === "books"
-              ? "bg-yellow-400 text-black border-yellow-400"
-              : "bg-white/5 border-white/10 text-gray-300"
-          }`}
-        >
-          Books
-        </button>
-
-        <button
-          onClick={() => goToSection("orders")}
-          className={`flex-1 py-3 rounded-xl border transition ${
-            activeSection === "orders"
-              ? "bg-yellow-400 text-black border-yellow-400"
-              : "bg-white/5 border-white/10 text-gray-300"
-          }`}
-        >
-          Order Status
-        </button>
-
-        <button
-          onClick={() => goToSection("printQueue")}
-          className={`flex-1 py-3 rounded-xl border transition ${
-            activeSection === "printQueue"
-              ? "bg-yellow-400 text-black border-yellow-400"
-              : "bg-white/5 border-white/10 text-gray-300"
-          }`}
-        >
-          Print Queue
-        </button>
-
-        <button
-          onClick={() => goToSection("banners")}
-          className={`flex-1 py-3 rounded-xl border transition ${
-            activeSection === "banners"
-              ? "bg-yellow-400 text-black border-yellow-400"
-              : "bg-white/5 border-white/10 text-gray-300"
-          }`}
-        >
-          Banners
-        </button>
-
-        <button
-          onClick={() => goToSection("support")}
-          className={`flex-1 py-3 rounded-xl border transition ${
-            activeSection === "support"
-              ? "bg-yellow-400 text-black border-yellow-400"
-              : "bg-white/5 border-white/10 text-gray-300"
-          }`}
-        >
-          Support
-        </button>
-      </div>}
-
-      {!loading && activeSection === "books" && (
-        <>
-          <div className="bg-white/5 border border-white/10 rounded-xl p-4 mb-6">
-            <h2 className="text-lg font-semibold mb-4">
-              Create Book
-            </h2>
-
-            <div className="grid gap-3">
-              <input
-                value={newBook.name}
-                onChange={(event) => setNewBook((current) => ({ ...current, name: event.target.value }))}
-                placeholder="Book name"
-                className="bg-white/5 border border-white/10 rounded-xl p-3"
-              />
-
-              <input
-                value={newBook.year}
-                onChange={(event) => setNewBook((current) => ({ ...current, year: event.target.value }))}
-                placeholder="Year"
-                className="bg-white/5 border border-white/10 rounded-xl p-3"
-              />
-
-              <label className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white">
-                <input
-                  type="checkbox"
-                  checked={newBook.requires_details}
-                  onChange={(event) =>
-                    setNewBook((current) => ({
-                      ...current,
-                      requires_details: event.target.checked,
-                    }))
-                  }
-                />
-                Special request card
-              </label>
-
-              <label className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white">
-                <input
-                  type="checkbox"
-                  checked={newBook.is_pinned}
-                  onChange={(event) =>
-                    setNewBook((current) => ({
-                      ...current,
-                      is_pinned: event.target.checked,
-                    }))
-                  }
-                />
-                Pin this book to top
-              </label>
-
-              <button
-                onClick={createBook}
-                disabled={actionLoading === "create-book"}
-                className="bg-yellow-400 text-black py-2 rounded-xl font-semibold"
+          {item.stored_filename && (
+            <div className="mt-2 flex gap-3">
+              <a
+                href={`${API_BASE_URL}/uploads/${item.stored_filename}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm text-yellow-300 underline"
               >
-                {actionLoading === "create-book" ? "Processing..." : "Add Book"}
+                Download PDF
+              </a>
+              <button
+                onClick={() => deleteUploadedFile(item.id)}
+                disabled={actionLoading === `delete-file-${item.id}`}
+                className="text-sm text-red-300"
+              >
+                {actionLoading === `delete-file-${item.id}` ? "Deleting..." : "Delete File"}
               </button>
             </div>
-          </div>
-
-          <div className="bg-white/5 border border-white/10 rounded-xl p-4 mb-6">
-            <h2 className="text-lg font-semibold mb-4">
-              Add Book Option
-            </h2>
-            <p className="mb-4 text-sm text-gray-400">
-              For a simple fixed-price book, keep both Mode and Side Selection empty.
-            </p>
-
-            <div className="grid gap-3">
-              <select
-                value={newOption.book_id}
-                onChange={(event) => setNewOption((current) => ({ ...current, book_id: event.target.value }))}
-                className="bg-white/5 border border-white/10 rounded-xl p-3"
-              >
-                <option value="">
-                  Select book
-                </option>
-                {books.map((book) => (
-                  <option key={book.id} value={book.id}>
-                    {book.name}
-                  </option>
-                ))}
-              </select>
-
-              <input
-                value={newOption.mode}
-                onChange={(event) => setNewOption((current) => ({ ...current, mode: event.target.value }))}
-                placeholder="Mode (optional, e.g. A or R)"
-                className="bg-white/5 border border-white/10 rounded-xl p-3"
-              />
-
-              <select
-                value={newOption.print_type}
-                onChange={(event) => setNewOption((current) => ({ ...current, print_type: event.target.value }))}
-                className="bg-white/5 border border-white/10 rounded-xl p-3"
-              >
-                <option value="">
-                  No side selection (simple book)
-                </option>
-                <option value="single">
-                  Single
-                </option>
-                <option value="double">
-                  Double
-                </option>
-              </select>
-
-              <input
-                type="number"
-                value={newOption.price}
-                onChange={(event) => setNewOption((current) => ({ ...current, price: event.target.value }))}
-                placeholder="Price"
-                className="bg-white/5 border border-white/10 rounded-xl p-3"
-              />
-
-              <button
-                onClick={createBookOption}
-                disabled={actionLoading === "create-option"}
-                className="bg-yellow-400 text-black py-2 rounded-xl font-semibold"
-              >
-                {actionLoading === "create-option" ? "Processing..." : "Add Option"}
-              </button>
-            </div>
-          </div>
-
-          <div className="mb-8">
-            <h2 className="text-lg font-semibold mb-4">
-              Books & Pricing
-            </h2>
-
-            {books.length === 0 && (
-              <p className="text-gray-400">
-                No books available
-              </p>
-            )}
-
-            {books.map((book) => (
-              <div
-                key={book.id}
-                className="bg-white/5 border border-white/10 rounded-xl p-4 mb-4"
-              >
-                <div className="grid gap-3 mb-3">
-                  <input
-                    value={book.name}
-                    onChange={(event) => handleBookChange(book.id, "name", event.target.value)}
-                    className="bg-white/5 border border-white/10 rounded-xl p-3"
-                  />
-
-                  <input
-                    value={book.year}
-                    onChange={(event) => handleBookChange(book.id, "year", event.target.value)}
-                    className="bg-white/5 border border-white/10 rounded-xl p-3"
-                  />
-
-                  <label className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white">
-                    <input
-                      type="checkbox"
-                      checked={!!book.requires_details}
-                      onChange={(event) => handleBookChange(book.id, "requires_details", event.target.checked)}
-                    />
-                    Special request card
-                  </label>
-
-                  <label className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white">
-                    <input
-                      type="checkbox"
-                      checked={!!book.is_pinned}
-                      onChange={(event) => handleBookChange(book.id, "is_pinned", event.target.checked)}
-                    />
-                    Pin this book to top
-                  </label>
-                </div>
-
-                <div className="flex gap-2 mb-3">
-                  <button
-                    onClick={() => saveBook(book)}
-                    disabled={actionLoading === `save-book-${book.id}`}
-                    className="bg-green-500 text-black px-3 py-2 rounded"
-                  >
-                    {actionLoading === `save-book-${book.id}` ? "Processing..." : "Save Book"}
-                  </button>
-
-                  <button
-                    onClick={() => deleteBook(book.id)}
-                    disabled={actionLoading === `delete-book-${book.id}`}
-                    className="bg-red-500 text-black px-3 py-2 rounded"
-                  >
-                    {actionLoading === `delete-book-${book.id}` ? "Processing..." : "Delete Book"}
-                  </button>
-                </div>
-
-                {(book.options || []).length === 0 && (
-                  <p className="text-gray-500 text-sm">
-                    No pricing options yet
-                  </p>
-                )}
-
-                {(book.options || []).map((option) => (
-                  <div key={option.id} className="border-t border-white/5 pt-3 mt-3">
-                    <p className="mb-3 text-xs uppercase tracking-[0.24em] text-white/45">
-                      {!option.mode && !option.print_type ? "Simple fixed price option" : "Book option"}
-                    </p>
-                    <div className="grid gap-3">
-                      <input
-                        value={option.mode || ""}
-                        onChange={(event) => handleOptionChange(book.id, option.id, "mode", event.target.value)}
-                        placeholder="Mode (optional)"
-                        className="bg-white/5 border border-white/10 rounded-xl p-3"
-                      />
-
-                      <select
-                        value={option.print_type || ""}
-                        onChange={(event) => handleOptionChange(book.id, option.id, "print_type", event.target.value)}
-                        className="bg-white/5 border border-white/10 rounded-xl p-3"
-                      >
-                        <option value="">
-                          No side selection (simple book)
-                        </option>
-                        <option value="single">
-                          Single
-                        </option>
-                        <option value="double">
-                          Double
-                        </option>
-                      </select>
-
-                      <input
-                        type="number"
-                        value={option.price ?? ""}
-                        onChange={(event) => handleOptionChange(book.id, option.id, "price", event.target.value)}
-                        className="bg-white/5 border border-white/10 rounded-xl p-3"
-                      />
-                    </div>
-
-                    <div className="flex gap-2 mt-3">
-                      <button
-                        onClick={() => saveOption(book.id, option)}
-                        disabled={actionLoading === `save-option-${option.id}`}
-                        className="bg-green-500 text-black px-3 py-2 rounded"
-                      >
-                        {actionLoading === `save-option-${option.id}` ? "Processing..." : "Save"}
-                      </button>
-
-                      <button
-                        onClick={() => deleteOption(option.id)}
-                        disabled={actionLoading === `delete-option-${option.id}`}
-                        className="bg-red-500 text-black px-3 py-2 rounded"
-                      >
-                        {actionLoading === `delete-option-${option.id}` ? "Processing..." : "Delete"}
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-
-      {!loading && activeSection === "orders" && (
-        <>
-          {orders.length === 0 && (
-            <p className="text-gray-400">
-              No orders yet
-            </p>
           )}
-
-          {orders.map((order) => (
-            <div
-              key={order.id}
-              data-new-order={
-                order.status === "pending" &&
-                order.created_at &&
-                Date.now() - new Date(order.created_at).getTime() < 6 * 60 * 1000
-              }
-              className={`rounded-xl border p-4 mb-4 transition ${
-                order.status === "delivered"
-                  ? "bg-white/5 border-green-500/30 opacity-75"
-                  : Date.now() - new Date(order.created_at).getTime() < 6 * 60 * 1000 && order.status === "pending"
-                    ? "bg-white/5 border-yellow-400/50 shadow-[0_0_0_1px_rgba(250,204,21,0.18)]"
-                    : "bg-white/5 border-white/10"
-              }`}
-            >
-              <div className={order.status === "delivered" ? "line-through decoration-green-500/70" : ""}>
-                <p className="text-gray-300">
-                  Order ID: {order.id}
-                </p>
-
-                <p className="text-gray-300">
-                  Amount: ₹{Math.round(Number(order.amount ?? order.total_amount ?? 0))}
-                </p>
-
-                <p className="text-gray-300">
-                  Status: {order.status}
-                </p>
-
-                <p className="text-gray-400 text-sm">
-                  Contact: {order.contact_number}
-                </p>
-
-                <p className="text-gray-400 text-sm">
-                  User: {order.user_name || order.user?.username || "-"}
-                </p>
-
-                <p className="text-gray-400 text-sm">
-                  Hostel: {order.hostel || order.hostel_name || "-"}
-                </p>
-
-                <p className="text-gray-400 text-xs">
-                  Time: {order.created_at ? new Date(order.created_at).toLocaleString() : "-"}
-                </p>
-
-                <div className="mt-3 space-y-2">
-                {(order.items || []).map((item) => (
-                  <div key={item.id} className="border-t border-white/5 pt-2">
-                    <p className="text-gray-300 text-sm">
-                      {item.item_name || "Unnamed item"} â€¢ â‚¹{item.total_price}
-                    </p>
-
-                    <p className="text-gray-500 text-xs">
-                      {item.mode || "-"} â€¢ {item.print_type === "single" ? "Single Side" : item.print_type === "double" ? "Double Side" : item.print_type || "-"} â€¢ Qty {item.quantity}
-                    </p>
-
-                    {item.leave_date && (
-                      <p className="text-gray-500 text-xs mt-1">
-                        Leave: {item.leave_date}{item.leave_to_date ? ` to ${item.leave_to_date}` : ""}
-                      </p>
-                    )}
-
-                    {item.request_reason && (
-                      <p className="text-gray-500 text-xs mt-1">
-                        Reason: {item.request_reason}
-                      </p>
-                    )}
-
-                    {item.stored_filename && (
-                      <div className="mt-2 flex gap-2">
-                        <a
-                          href={`${API_BASE_URL}/uploads/${item.stored_filename}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-yellow-400 underline text-sm"
-                        >
-                          Download PDF
-                        </a>
-
-                        <button
-                          onClick={() => deleteUploadedFile(item.id)}
-                          disabled={actionLoading === `delete-file-${item.id}`}
-                          className="text-red-400 text-sm"
-                        >
-                          {actionLoading === `delete-file-${item.id}` ? "Deleting..." : "Delete File"}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                ))}
-                </div>
-              </div>
-
-              <div className="flex gap-2 mt-4">
-                <button
-                  onClick={() => updateStatus(order.id, "printing")}
-                  disabled={actionLoading === `${order.id}-printing` || order.status === "delivered"}
-                  className="bg-yellow-400 text-black px-3 py-1 rounded"
-                >
-                  {actionLoading === `${order.id}-printing` ? "Processing..." : "Printing"}
-                </button>
-
-                <button
-                  onClick={() => updateStatus(order.id, "ready")}
-                  disabled={actionLoading === `${order.id}-ready` || order.status === "delivered"}
-                  className="bg-green-500 text-black px-3 py-1 rounded"
-                >
-                  {actionLoading === `${order.id}-ready` ? "Processing..." : "Ready"}
-                </button>
-
-                <button
-                  onClick={() => updateStatus(order.id, "delivered")}
-                  disabled={actionLoading === `${order.id}-delivered` || order.status === "delivered"}
-                  className="bg-blue-500 text-black px-3 py-1 rounded"
-                >
-                  {order.status === "delivered"
-                    ? "Delivered"
-                    : actionLoading === `${order.id}-delivered`
-                      ? "Processing..."
-                      : "Delivered"}
-                </button>
-              </div>
-            </div>
-          ))}
-        </>
-      )}
-
-      {!loading && activeSection === "printQueue" && (
-        <div className="bg-white/5 border border-white/10 rounded-xl p-4">
-          <div className="flex items-center justify-between gap-3 mb-4">
-            <div>
-              <h2 className="text-lg font-semibold">
-                Printer Queue
-              </h2>
-              <p className="text-sm text-gray-400">
-                Grouped bulk items waiting to be printed
-              </p>
-            </div>
-
-            <button
-              onClick={markAllPrinted}
-              disabled={actionLoading === "print-complete"}
-              className="bg-yellow-400 text-black px-4 py-2 rounded-xl font-semibold"
-            >
-              {actionLoading === "print-complete" ? "Processing..." : "Mark Printed"}
-            </button>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="text-gray-400">
-                  <th className="pb-3 font-normal">
-                    Book
-                  </th>
-                  <th className="pb-3 font-normal">
-                    Mode
-                  </th>
-                  <th className="pb-3 font-normal">
-                    Print
-                  </th>
-                  <th className="pb-3 font-normal">
-                    Copies
-                  </th>
-                  <th className="pb-3 font-normal">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {printSummary.length === 0 && (
-                  <tr>
-                    <td colSpan="5" className="py-3 text-gray-500">
-                      No pending bulk print items
-                    </td>
-                  </tr>
-                )}
-
-                {printSummary.map((item) => {
-                  const queueKey = `${item.item_name}-${item.mode}-${item.print_type}`
-                  const startKey = `queue-start-${item.item_name}-${item.mode}-${item.print_type}`
-                  const completeKey = `queue-complete-${item.item_name}-${item.mode}-${item.print_type}`
-
-                  return (
-                    <tr key={queueKey} className="border-t border-white/5">
-                      <td className="py-3 text-gray-300">
-                        {item.item_name}
-                      </td>
-                      <td className="py-3 text-gray-400">
-                        {item.mode || "-"}
-                      </td>
-                      <td className="py-3 text-gray-400">
-                        {item.print_type === "single" ? "Single" : item.print_type === "double" ? "Double" : item.print_type || "-"}
-                      </td>
-                      <td className="py-3 text-yellow-400">
-                        {item.quantity}
-                      </td>
-                      <td className="py-3">
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => startPrinting(item)}
-                            disabled={actionLoading === startKey}
-                            className="bg-yellow-400 text-black px-3 py-1 rounded"
-                          >
-                            {actionLoading === startKey ? "Processing..." : "Start Printing"}
-                          </button>
-
-                          <button
-                            onClick={() => markQueueItemPrinted(item)}
-                            disabled={actionLoading === completeKey}
-                            className="bg-green-500 text-black px-3 py-1 rounded"
-                          >
-                            {actionLoading === completeKey ? "Processing..." : "Mark Printed"}
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
         </div>
-      )}
-
-      {!loading && activeSection === "banners" && (
-        <>
-          <div className="bg-white/5 border border-white/10 rounded-xl p-4 mb-6">
-            <div className="flex items-center justify-between gap-3 mb-4">
-              <div>
-                <h2 className="text-lg font-semibold">
-                  Banner Management
-                </h2>
-                <p className="text-sm text-gray-400">
-                  Manage the home page slider without changing the rest of the layout.
-                </p>
-              </div>
-
-              {editingBannerId && (
-                <button
-                  onClick={resetBannerForm}
-                  className="rounded-xl border border-white/10 bg-white/10 px-4 py-2 text-sm font-semibold text-white"
-                >
-                  Cancel Edit
-                </button>
-              )}
-            </div>
-
-            <div className="grid gap-3">
-              <input
-                type="file"
-                accept="image/*"
-                onChange={(event) =>
-                  setBannerForm((current) => ({
-                    ...current,
-                    image: event.target.files?.[0] || null,
-                  }))
-                }
-                className="bg-white/5 border border-white/10 rounded-xl p-3"
-              />
-
-              <input
-                value={bannerForm.title}
-                onChange={(event) => setBannerForm((current) => ({ ...current, title: event.target.value }))}
-                placeholder="Title (optional)"
-                className="bg-white/5 border border-white/10 rounded-xl p-3"
-              />
-
-              <input
-                value={bannerForm.subtitle}
-                onChange={(event) => setBannerForm((current) => ({ ...current, subtitle: event.target.value }))}
-                placeholder="Subtitle (optional)"
-                className="bg-white/5 border border-white/10 rounded-xl p-3"
-              />
-
-              <input
-                value={bannerForm.link}
-                onChange={(event) => setBannerForm((current) => ({ ...current, link: event.target.value }))}
-                placeholder="Link (optional)"
-                className="bg-white/5 border border-white/10 rounded-xl p-3"
-              />
-
-              <label className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white">
-                <input
-                  type="checkbox"
-                  checked={bannerForm.clickable}
-                  onChange={(event) => setBannerForm((current) => ({ ...current, clickable: event.target.checked }))}
-                />
-                Clickable
-              </label>
-
-              <label className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white">
-                <input
-                  type="checkbox"
-                  checked={bannerForm.active}
-                  onChange={(event) => setBannerForm((current) => ({ ...current, active: event.target.checked }))}
-                />
-                Active
-              </label>
-
-              <button
-                onClick={submitBanner}
-                disabled={actionLoading === "banner-create" || actionLoading === `banner-save-${editingBannerId}`}
-                className="bg-yellow-400 text-black py-2 rounded-xl font-semibold"
-              >
-                {editingBannerId
-                  ? actionLoading === `banner-save-${editingBannerId}` ? "Processing..." : "Update Banner"
-                  : actionLoading === "banner-create" ? "Processing..." : "Add Banner"}
-              </button>
-            </div>
-          </div>
-
-          <div className="space-y-4">
-            {banners.length === 0 && (
-              <p className="text-gray-400">
-                No banners yet
-              </p>
-            )}
-
-            {banners.map((banner) => (
-              <div key={banner.id} className="bg-white/5 border border-white/10 rounded-xl p-4">
-                <div className="flex gap-4">
-                  <img
-                    src={/^https?:\/\//i.test(banner.image) ? banner.image : `${API_BASE_URL}${banner.image}`}
-                    alt={banner.title || "Banner"}
-                    className="h-20 w-28 rounded-xl object-cover border border-white/10"
-                  />
-
-                  <div className="min-w-0 flex-1">
-                    <p className="font-semibold text-white truncate">
-                      {banner.title || "Untitled banner"}
-                    </p>
-                    <p className="mt-1 text-sm text-gray-400 truncate">
-                      {banner.subtitle || "No subtitle"}
-                    </p>
-                    <p className="mt-1 text-xs text-white/45 truncate">
-                      {banner.link || "No link"}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <button
-                    onClick={() => toggleBannerActive(banner)}
-                    disabled={actionLoading === `banner-toggle-${banner.id}`}
-                    className="rounded-xl bg-white/10 px-3 py-2 text-sm font-semibold text-white"
-                  >
-                    {actionLoading === `banner-toggle-${banner.id}`
-                      ? "Processing..."
-                      : banner.active ? "Disable" : "Enable"}
-                  </button>
-
-                  <button
-                    onClick={() => editBanner(banner)}
-                    className="rounded-xl bg-yellow-400 px-3 py-2 text-sm font-semibold text-black"
-                  >
-                    Edit
-                  </button>
-
-                  <button
-                    onClick={() => deleteBanner(banner.id)}
-                    disabled={actionLoading === `banner-delete-${banner.id}`}
-                    className="rounded-xl bg-red-500 px-3 py-2 text-sm font-semibold text-black"
-                  >
-                    {actionLoading === `banner-delete-${banner.id}` ? "Processing..." : "Delete"}
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-
-      {!loading && activeSection === "support" && (
-        <div className="bg-white/5 border border-white/10 rounded-xl p-4">
-          <div className="flex items-center justify-between gap-3 mb-4">
-            <div>
-              <h2 className="text-lg font-semibold">
-                User Help
-              </h2>
-              <p className="text-sm text-gray-400">
-                User problems and admin replies
-              </p>
-            </div>
-            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-white/65">
-              {supportThreads.length} threads
-            </span>
-          </div>
-
-          {supportThreads.length === 0 && (
-            <p className="text-gray-400">
-              No help queries yet
-            </p>
-          )}
-
-          {supportThreads.map((thread) => (
-            <div key={thread.id} className="mb-4 rounded-xl border border-white/10 bg-white/5 p-4">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-white font-semibold">
-                    Query #{thread.id}
-                  </p>
-                  <p className="text-sm text-gray-400">
-                    User: {thread.user?.username || "Unknown user"}
-                  </p>
-                </div>
-                <span className="rounded-full bg-white/10 px-3 py-1 text-xs capitalize text-yellow-400">
-                  {thread.status}
-                </span>
-              </div>
-
-              <div className="mt-3 space-y-2">
-                {(thread.messages || []).map((message) => (
-                  <div
-                    key={message.id}
-                    className={`rounded-xl px-3 py-2 text-sm ${
-                      message.sender_role === "admin"
-                        ? "bg-yellow-400/10 text-yellow-300"
-                        : "bg-white/10 text-gray-200"
-                    }`}
-                  >
-                    <p className="text-xs uppercase tracking-[0.24em] text-white/45">
-                      {message.sender_role === "admin" ? "Admin" : "User"}
-                    </p>
-                    <p className="mt-1">
-                      {message.message}
-                    </p>
-                  </div>
-                ))}
-              </div>
-
-              <textarea
-                value={supportReplies[thread.id] || ""}
-                onChange={(event) =>
-                  setSupportReplies((current) => ({
-                    ...current,
-                    [thread.id]: event.target.value,
-                  }))
-                }
-                rows={3}
-                placeholder="Write your reply..."
-                className="mt-3 w-full rounded-xl border border-white/10 bg-white/5 p-3"
-              />
-
-              <button
-                onClick={() => replyToSupportThread(thread.id)}
-                disabled={actionLoading === `support-reply-${thread.id}`}
-                className="mt-3 rounded-xl bg-yellow-400 px-4 py-2 font-semibold text-black"
-              >
-                {actionLoading === `support-reply-${thread.id}` ? "Processing..." : "Send Reply"}
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
+      ))}
     </div>
-
   )
 
+  const VerificationCard = ({ order }) => (
+    <article className="rounded-xl border border-white/10 bg-white/5 p-4">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-3">
+            <h3 className="text-lg font-semibold text-white">{orderName(order)}</h3>
+            <span className="rounded-xl border border-yellow-400/25 bg-yellow-400/15 px-4 py-2 text-2xl font-black text-yellow-300">
+              {formatAmount(orderAmount(order))}
+            </span>
+          </div>
+          <div className="mt-3 grid gap-1 text-sm text-white/60 sm:grid-cols-2">
+            <p>Phone: {orderPhone(order)}</p>
+            <p>UTR: <span className="font-semibold text-white">{order.utr_number || order.utr || "-"}</span></p>
+            <p>Transaction ID: <span className="font-semibold text-white">{order.transaction_id || "-"}</span></p>
+            <p>Submitted: {submittedAt(order.created_at)}</p>
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={() => updateStatus(order.id, "approved")}
+            disabled={actionLoading === `${order.id}-approved`}
+            className="rounded-xl bg-green-400 px-4 py-2 font-semibold text-black"
+          >
+            {actionLoading === `${order.id}-approved` ? "Saving..." : "Approve"}
+          </button>
+          <button
+            onClick={() => updateStatus(order.id, "rejected")}
+            disabled={actionLoading === `${order.id}-rejected`}
+            className="rounded-xl bg-red-400 px-4 py-2 font-semibold text-black"
+          >
+            {actionLoading === `${order.id}-rejected` ? "Saving..." : "Reject"}
+          </button>
+        </div>
+      </div>
+    </article>
+  )
+
+  const PrintingCard = ({ order }) => (
+    <article className="rounded-xl border border-white/10 bg-white/5 p-4">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <div className="flex flex-wrap items-center gap-3">
+            <h3 className="text-lg font-semibold text-white">{orderName(order)}</h3>
+            <span className="rounded-lg bg-yellow-400 px-3 py-1 text-lg font-black text-black">{formatAmount(orderAmount(order))}</span>
+          </div>
+          <div className="mt-2 grid gap-1 text-sm text-white/60 sm:grid-cols-2">
+            <p>Phone: {orderPhone(order)}</p>
+            <p>Hostel: {orderHostel(order)}</p>
+            <p>Delivery: {order.delivery_type}</p>
+            <p>Status: {order.payment_status}</p>
+          </div>
+          <OrderItems order={order} />
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => updateStatus(order.id, "printing")}
+            disabled={actionLoading === `${order.id}-printing` || order.payment_status === "printing"}
+            className="rounded-xl bg-yellow-400 px-4 py-2 font-semibold text-black disabled:opacity-60"
+          >
+            {actionLoading === `${order.id}-printing` ? "Saving..." : "Mark Printing"}
+          </button>
+          <button
+            onClick={() => updateStatus(order.id, "delivered")}
+            disabled={actionLoading === `${order.id}-delivered`}
+            className="rounded-xl bg-blue-400 px-4 py-2 font-semibold text-black"
+          >
+            {actionLoading === `${order.id}-delivered` ? "Saving..." : "Mark Delivered"}
+          </button>
+        </div>
+      </div>
+    </article>
+  )
+
+  return (
+    <div className="px-4 pb-24 pt-24">
+      <div className="mx-auto max-w-6xl">
+        <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <p className="text-sm font-semibold uppercase tracking-[0.22em] text-white/45">BatPrint Admin</p>
+            <h1 className="mt-2 text-3xl font-bold text-white">Manual Verification</h1>
+          </div>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <Metric label="Pending" value={pendingSubmissions.length} />
+            <Metric label="Printing" value={printingOrders.length} />
+            <Metric label="Delivered" value={completedOrders.length} />
+            <Metric label="Revenue" value={formatAmount(analytics.total_revenue)} />
+          </div>
+        </div>
+
+        <div className="mb-5 flex gap-2 overflow-x-auto rounded-xl border border-white/10 bg-white/5 p-2">
+          {tabs.map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => goToSection(key)}
+              className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-semibold transition ${
+                activeSection === key ? "bg-yellow-400 text-black" : "text-white/70 hover:bg-white/10"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {loading && <div className="h-48 rounded-xl border border-white/10 bg-white/5 animate-pulse" />}
+
+        {!loading && activeSection === "verification" && (
+          <section className="grid gap-4">
+            <div className="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 p-4 lg:flex-row lg:items-center lg:justify-between">
+              <input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search UTR, transaction ID, phone number, or user name"
+                className="min-h-12 flex-1 rounded-xl border border-white/10 bg-black/30 px-4 text-white outline-none focus:border-yellow-400/70"
+              />
+              <button
+                onClick={() => downloadExcel("/admin/payment-verification-excel", "payment-verification.xlsx")}
+                disabled={actionLoading === "payment-verification.xlsx"}
+                className="rounded-xl bg-yellow-400 px-4 py-3 font-semibold text-black"
+              >
+                Download Excel
+              </button>
+            </div>
+
+            {filteredPending.length === 0 ? (
+              <EmptyState text="No pending payment submissions" />
+            ) : (
+              filteredPending.map((order) => <VerificationCard key={order.id} order={order} />)
+            )}
+          </section>
+        )}
+
+        {!loading && activeSection === "printing" && (
+          <section className="grid gap-4">
+            <div className="flex justify-end">
+              <button
+                onClick={() => downloadExcel("/admin/printing-excel", "printing-queue.xlsx")}
+                disabled={actionLoading === "printing-queue.xlsx"}
+                className="rounded-xl bg-yellow-400 px-4 py-3 font-semibold text-black"
+              >
+                Download Excel
+              </button>
+            </div>
+            {printingOrders.length === 0 ? (
+              <EmptyState text="No approved orders in printing queue" />
+            ) : (
+              printingOrders.map((order) => <PrintingCard key={order.id} order={order} />)
+            )}
+          </section>
+        )}
+
+        {!loading && activeSection === "completed" && (
+          <section className="grid gap-4">
+            {completedOrders.length === 0 ? (
+              <EmptyState text="No delivered orders yet" />
+            ) : (
+              completedOrders.map((order) => <PrintingCard key={order.id} order={order} />)
+            )}
+          </section>
+        )}
+
+        {!loading && activeSection === "banners" && (
+          <section className="grid gap-5 lg:grid-cols-[minmax(280px,360px)_1fr]">
+            <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="text-lg font-semibold text-white">Banner Management</h2>
+                {editingBannerId && (
+                  <button onClick={resetBannerForm} className="rounded-lg bg-white/10 px-3 py-2 text-sm text-white">
+                    Cancel
+                  </button>
+                )}
+              </div>
+              <div className="grid gap-3">
+                <input type="file" accept="image/*" onChange={(event) => setBannerForm((current) => ({ ...current, image: event.target.files?.[0] || null }))} className="rounded-xl border border-white/10 bg-black/30 p-3 text-white" />
+                <input value={bannerForm.title} onChange={(event) => setBannerForm((current) => ({ ...current, title: event.target.value }))} placeholder="Title" className="rounded-xl border border-white/10 bg-black/30 p-3 text-white" />
+                <input value={bannerForm.subtitle} onChange={(event) => setBannerForm((current) => ({ ...current, subtitle: event.target.value }))} placeholder="Subtitle" className="rounded-xl border border-white/10 bg-black/30 p-3 text-white" />
+                <input value={bannerForm.link} onChange={(event) => setBannerForm((current) => ({ ...current, link: event.target.value }))} placeholder="Link, e.g. www.telegram.com" className="rounded-xl border border-white/10 bg-black/30 p-3 text-white" />
+                <label className="flex items-center gap-3 rounded-xl border border-white/10 bg-black/30 p-3 text-sm text-white">
+                  <input type="checkbox" checked={bannerForm.clickable} onChange={(event) => setBannerForm((current) => ({ ...current, clickable: event.target.checked }))} />
+                  Clickable
+                </label>
+                <label className="flex items-center gap-3 rounded-xl border border-white/10 bg-black/30 p-3 text-sm text-white">
+                  <input type="checkbox" checked={bannerForm.active} onChange={(event) => setBannerForm((current) => ({ ...current, active: event.target.checked }))} />
+                  Active
+                </label>
+                <button onClick={submitBanner} disabled={actionLoading === "banner-create" || actionLoading === `banner-save-${editingBannerId}`} className="rounded-xl bg-yellow-400 py-3 font-semibold text-black">
+                  {editingBannerId ? "Update Banner" : "Add Banner"}
+                </button>
+              </div>
+            </div>
+
+            <div className="grid gap-4">
+              {banners.length === 0 && <EmptyState text="No banners yet" />}
+              {banners.map((banner) => (
+                <article key={banner.id} className="rounded-xl border border-white/10 bg-white/5 p-4">
+                  <div className="flex gap-4">
+                    <img
+                      src={/^https?:\/\//i.test(banner.image) ? banner.image : `${API_BASE_URL}${banner.image}`}
+                      alt={banner.title || "Banner"}
+                      className="h-20 w-28 rounded-lg border border-white/10 object-cover"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate font-semibold text-white">{banner.title || "Untitled banner"}</p>
+                      <p className="truncate text-sm text-white/50">{banner.subtitle || "No subtitle"}</p>
+                      {banner.link ? (
+                        <a href={normalizeLink(banner.link)} target="_blank" rel="noopener noreferrer" className="truncate text-xs text-yellow-300 underline">
+                          {normalizeLink(banner.link)}
+                        </a>
+                      ) : (
+                        <p className="text-xs text-white/35">No link</p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button onClick={() => toggleBannerActive(banner)} disabled={actionLoading === `banner-toggle-${banner.id}`} className="rounded-lg bg-white/10 px-3 py-2 text-sm font-semibold text-white">
+                      {banner.active ? "Disable" : "Enable"}
+                    </button>
+                    <button onClick={() => editBanner(banner)} className="rounded-lg bg-yellow-400 px-3 py-2 text-sm font-semibold text-black">
+                      Edit
+                    </button>
+                    <button onClick={() => deleteBanner(banner.id)} disabled={actionLoading === `banner-delete-${banner.id}`} className="rounded-lg bg-red-400 px-3 py-2 text-sm font-semibold text-black">
+                      Delete
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function Metric({ label, value }) {
+  return (
+    <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3">
+      <p className="text-xs text-white/45">{label}</p>
+      <p className="text-lg font-bold text-yellow-300">{value}</p>
+    </div>
+  )
+}
+
+function EmptyState({ text }) {
+  return (
+    <div className="rounded-xl border border-white/10 bg-white/5 p-8 text-center text-white/50">
+      {text}
+    </div>
+  )
 }
 
 export default Admin

@@ -3,27 +3,30 @@ import shutil
 import uuid
 import logging
 import base64
-import math
 import random
-import re
 import time
-from decimal import Decimal, InvalidOperation
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
+from io import BytesIO
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func, inspect, or_, text
 from sqlalchemy.orm import Session, joinedload
+
+try:
+    from openpyxl import Workbook
+except ImportError:  # Local dev can still run before requirements are installed.
+    Workbook = None
 
 load_dotenv()
 
@@ -40,9 +43,6 @@ PDF_SINGLE_BASE_CHARGE = 65.0
 PDF_DOUBLE_PRICE_PER_PAGE = 1.25
 PDF_DOUBLE_BASE_CHARGE = 65.0
 UPI_ID = "9052612456-3@ybl"
-UPI_PAYEE_NAME = "name"
-PAYMENT_WINDOW_MINUTES = 6
-PAYMENT_LATE_BUFFER_MINUTES = 3
 
 def get_required_env(name: str) -> str:
     value = os.getenv(name)
@@ -325,7 +325,13 @@ def calculate_pdf_total(total_pages: int, print_type: str | None = None) -> floa
     return (total_pages * pricing["price_per_page"]) + pricing["base_charge"]
 
 
-VALID_ORDER_STATUSES = {"pending", "paid", "printing", "ready", "delivered"}
+VALID_ORDER_STATUSES = {
+    "pending_verification",
+    "approved",
+    "rejected",
+    "printing",
+    "delivered",
+}
 
 
 def get_pending_print_queue_query(db: Session):
@@ -334,7 +340,7 @@ def get_pending_print_queue_query(db: Session):
         .join(models.Order, models.Order.id == models.OrderItem.order_id)
         .filter(
             models.OrderItem.printed.is_(False),
-            models.Order.status.in_(["paid", "printing", "ready"]),
+            models.Order.status.in_(["approved", "printing"]),
         )
     )
 
@@ -426,6 +432,9 @@ def sync_schema():
             "payment_status": "ALTER TABLE orders ADD COLUMN payment_status VARCHAR DEFAULT 'pending'",
             "payment_method": "ALTER TABLE orders ADD COLUMN payment_method VARCHAR DEFAULT 'UPI'",
             "utr": "ALTER TABLE orders ADD COLUMN utr VARCHAR",
+            "transaction_id": "ALTER TABLE orders ADD COLUMN transaction_id VARCHAR",
+            "fraud_flag": "ALTER TABLE orders ADD COLUMN fraud_flag BOOLEAN DEFAULT FALSE",
+            "verification_notes": "ALTER TABLE orders ADD COLUMN verification_notes VARCHAR",
             "unique_amount": "ALTER TABLE orders ADD COLUMN unique_amount FLOAT",
             "payment_started_at": "ALTER TABLE orders ADD COLUMN payment_started_at TIMESTAMP",
             "expires_at": "ALTER TABLE orders ADD COLUMN expires_at TIMESTAMP",
@@ -473,6 +482,8 @@ def sync_schema():
             "CREATE INDEX IF NOT EXISTS ix_book_options_book_id ON book_options (book_id)",
             "CREATE INDEX IF NOT EXISTS ix_support_threads_user_id ON support_threads (user_id)",
             "CREATE INDEX IF NOT EXISTS ix_support_messages_thread_id ON support_messages (thread_id)",
+            "CREATE INDEX IF NOT EXISTS ix_orders_utr ON orders (utr)",
+            "CREATE INDEX IF NOT EXISTS ix_orders_transaction_id ON orders (transaction_id)",
         ]:
             connection.execute(text(statement))
 
@@ -607,6 +618,15 @@ def serialize_banner(banner: models.Banner):
     }
 
 
+def normalize_external_link(link: str | None) -> str | None:
+    normalized = (link or "").strip()
+    if not normalized:
+        return None
+    if normalized.startswith(("http://", "https://")):
+        return normalized
+    return f"https://{normalized.lstrip('/')}"
+
+
 def serialize_upload(upload: models.Upload):
     return {
         "id": upload.id,
@@ -691,6 +711,10 @@ def serialize_order(order: models.Order, include_user: bool = False):
         "payment_status": order.payment_status,
         "payment_method": order.payment_method,
         "utr": order.utr,
+        "utr_number": order.utr,
+        "transaction_id": order.transaction_id,
+        "fraud_flag": bool(order.fraud_flag),
+        "verification_notes": order.verification_notes,
         "status": order.status,
         "payment_started_at": order.payment_started_at.isoformat() if order.payment_started_at else None,
         "expires_at": order.expires_at.isoformat() if order.expires_at else None,
@@ -750,92 +774,6 @@ def build_unique_username(base_username: str, phone_number: str, db: Session) ->
 
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def generate_upi_link(amount: float | int) -> str:
-    return f"upi://pay?pa={UPI_ID}&pn={UPI_PAYEE_NAME}&am={int(round(float(amount)))}&cu=INR"
-
-
-def expire_payment_if_needed(order: models.Order, db: Session) -> bool:
-    if (
-        order.payment_status == "WAITING_FOR_PAYMENT"
-        and order.expires_at
-        and now_utc() > order.expires_at
-    ):
-        order.payment_status = "FAILED"
-        order.status = "failed"
-        db.add(order)
-        db.commit()
-        db.refresh(order)
-        return True
-    return False
-
-
-def generate_unique_amount(base_amount: float, db: Session, exclude_order_id: int | None = None) -> int:
-    normalized_base = max(0, math.ceil(float(base_amount)))
-    current_time = now_utc()
-
-    query = db.query(models.Order.unique_amount).filter(
-        models.Order.unique_amount.is_not(None),
-        models.Order.payment_status == "WAITING_FOR_PAYMENT",
-        models.Order.expires_at.is_not(None),
-        models.Order.expires_at > current_time,
-    )
-    if exclude_order_id is not None:
-        query = query.filter(models.Order.id != exclude_order_id)
-
-    active_amounts = set()
-    for (value,) in query.all():
-        try:
-            active_amounts.add(int(round(float(value))))
-        except (TypeError, ValueError):
-            continue
-
-    candidate = normalized_base + 1
-    while candidate in active_amounts:
-        candidate += 1
-
-    return candidate
-
-
-def start_order_payment_session(order: models.Order, db: Session) -> models.Order:
-    current_time = now_utc()
-    order.unique_amount = generate_unique_amount(order.total_amount, db, exclude_order_id=order.id)
-    order.payment_started_at = current_time
-    order.expires_at = current_time + timedelta(minutes=PAYMENT_WINDOW_MINUTES)
-    order.payment_status = "WAITING_FOR_PAYMENT"
-    order.payment_method = "UPI"
-    db.add(order)
-    db.commit()
-    db.refresh(order)
-    return order
-
-
-def normalize_phonepe_text(value: str | None) -> str:
-    if not value:
-        return ""
-    return re.sub(r"\s+", " ", value.strip()).lower()
-
-
-def expire_stale_phonepe_orders(db: Session):
-    now = now_utc()
-    stale_orders = (
-        db.query(models.Order)
-        .filter(
-            models.Order.payment_status == "WAITING_FOR_PAYMENT",
-            models.Order.expires_at.is_not(None),
-            models.Order.expires_at < now,
-        )
-        .all()
-    )
-    updated = 0
-    for order in stale_orders:
-        order.payment_status = "FAILED"
-        order.status = "failed"
-        updated += 1
-    if updated:
-        db.commit()
-    return updated
 
 
 def serialize_delivery_order(order: models.Order):
@@ -1158,7 +1096,7 @@ async def create_banner(
         image_url=f"/uploads/{stored_filename}",
         title=(title or "").strip() or None,
         subtitle=(subtitle or "").strip() or None,
-        link=(link or "").strip() or None,
+        link=normalize_external_link(link),
         clickable=clickable,
         active=active,
     )
@@ -1202,7 +1140,7 @@ async def update_banner(
     if subtitle is not None:
         banner.subtitle = subtitle.strip() or None
     if link is not None:
-        banner.link = link.strip() or None
+        banner.link = normalize_external_link(link)
     if clickable is not None:
         banner.clickable = clickable
     if active is not None:
@@ -1602,19 +1540,20 @@ def create_order(
         raise HTTPException(status_code=400, detail="Cart is empty")
 
     total_amount = sum((item.total_price or item.calculated_price or 0) for item in cart_items)
-    current_user.phone_number = order.contact_number
-    current_user.hostel = order.hostel_name if order.delivery_type == "hostel" else order.delivery_type
-    current_user.alternate_phone = order.alternate_contact_number
     new_order = models.Order(
         user_id=current_user.id,
+        user_name=order.user_name,
+        phone_number=order.contact_number,
+        hostel=order.hostel_name if order.delivery_type == "hostel" else "Day Scholar",
         delivery_type=order.delivery_type,
         hostel_name=order.hostel_name,
         contact_number=order.contact_number,
         alternate_contact_number=order.alternate_contact_number,
+        amount=total_amount,
         total_amount=total_amount,
-        payment_status="PENDING",
+        payment_status="pending_verification",
         payment_method="UPI",
-        status="pending",
+        status="pending_verification",
     )
     db.add(new_order)
     db.flush()
@@ -1646,16 +1585,13 @@ def create_order(
 
     db.commit()
     db.refresh(new_order)
-    new_order = start_order_payment_session(new_order, db)
     logger.info("order created order_id=%s user_id=%s total=%s", new_order.id, current_user.id, new_order.total_amount)
     return {
         "order_id": new_order.id,
         "total_amount": new_order.total_amount,
-        "unique_amount": new_order.unique_amount,
-        "upi_link": generate_upi_link(new_order.unique_amount or new_order.total_amount),
+        "amount": new_order.amount or new_order.total_amount,
+        "upi_id": UPI_ID,
         "payment_status": new_order.payment_status,
-        "payment_started_at": new_order.payment_started_at.isoformat() if new_order.payment_started_at else None,
-        "expires_at": new_order.expires_at.isoformat() if new_order.expires_at else None,
     }
 
 
@@ -1694,10 +1630,11 @@ def create_api_order(
         hostel_name=payload.hostel,
         contact_number=payload.phone_number,
         alternate_contact_number=payload.alternate_phone,
+        amount=0,
         total_amount=0,
-        payment_status="pending",
+        payment_status="pending_verification",
         payment_method="UPI",
-        status="pending",
+        status="pending_verification",
     )
     db.add(order)
     db.flush()
@@ -1744,6 +1681,7 @@ def create_api_order(
             )
         )
 
+    order.amount = total_amount
     order.total_amount = total_amount
     db.commit()
     db.refresh(order)
@@ -1761,9 +1699,9 @@ def verify_api_order(
         raise HTTPException(status_code=404, detail="Order not found")
 
     order.utr = payload.utr.strip()
-    order.payment_status = "verified"
+    order.payment_status = "pending_verification"
     order.payment_method = "UPI"
-    order.status = "paid"
+    order.status = "pending_verification"
     db.query(models.CartItem).filter(models.CartItem.user_id == order.user_id).delete()
     db.commit()
     logger.info("api order verified order_id=%s", order.id)
@@ -1771,13 +1709,11 @@ def verify_api_order(
 
 
 @app.post("/order/create")
-def create_phonepe_order(
-    order: schemas.PhonePeOrderCreate,
+def create_manual_payment_order(
+    order: schemas.ManualOrderCreate,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    expire_stale_phonepe_orders(db)
-
     new_order = models.Order(
         user_id=current_user.id,
         user_name=order.user_name,
@@ -1789,200 +1725,74 @@ def create_phonepe_order(
         alternate_contact_number=order.alternate_number or order.alternate_phone,
         amount=order.amount,
         total_amount=order.amount,
-        payment_status="WAITING_FOR_PAYMENT",
+        payment_status="pending_verification",
         payment_method="UPI",
-        status="pending",
+        status="pending_verification",
     )
     db.add(new_order)
-    db.flush()
-
-    current_user.phone_number = order.phone_number
-    current_user.hostel = order.hostel
-    if order.alternate_number or order.alternate_phone:
-        current_user.alternate_phone = order.alternate_number or order.alternate_phone
-
-    new_order = start_order_payment_session(new_order, db)
-    logger.info(
-        "phonepe order created order_id=%s user_id=%s user_name=%s total=%s unique_amount=%s",
-        new_order.id,
-        current_user.id,
-        new_order.user_name,
-        new_order.total_amount,
-        new_order.unique_amount,
-    )
+    db.commit()
+    db.refresh(new_order)
+    logger.info("manual payment order created order_id=%s user_id=%s total=%s", new_order.id, current_user.id, new_order.total_amount)
     return {
         "order_id": new_order.id,
-        "unique_amount": new_order.unique_amount,
-        "upi_link": generate_upi_link(new_order.unique_amount or new_order.total_amount),
+        "amount": new_order.amount or new_order.total_amount,
+        "upi_id": UPI_ID,
         "payment_status": new_order.payment_status,
-        "expires_at": new_order.expires_at.isoformat() if new_order.expires_at else None,
     }
 
 
-@app.post("/payment/create/{order_id}")
-def create_payment(
-    order_id: int,
+@app.post("/payment/submit-verification")
+def submit_payment_verification(
+    payload: schemas.PaymentVerificationCreate,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
+    utr_number = payload.utr_number.strip()
+    transaction_id = payload.transaction_id.strip()
     order = (
         db.query(models.Order)
-        .filter(models.Order.id == order_id, models.Order.user_id == current_user.id)
-        .first()
-    )
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
-    if order.payment_status in {"SUCCESS", "LATE_SUCCESS", "verified"}:
-        raise HTTPException(status_code=400, detail="Payment already completed for this order")
-
-    expire_payment_if_needed(order, db)
-    order = start_order_payment_session(order, db)
-    logger.info("payment session created order_id=%s user_id=%s unique_amount=%s", order.id, current_user.id, order.unique_amount)
-    return {
-        "order_id": order.id,
-        "unique_amount": order.unique_amount,
-        "upi_link": generate_upi_link(order.unique_amount or order.total_amount),
-        "payment_status": order.payment_status,
-        "payment_started_at": order.payment_started_at.isoformat() if order.payment_started_at else None,
-        "expires_at": order.expires_at.isoformat() if order.expires_at else None,
-    }
-
-
-@app.post("/regenerate-payment/{order_id}")
-def regenerate_payment(
-    order_id: int,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user),
-):
-    order = (
-        db.query(models.Order)
-        .filter(models.Order.id == order_id, models.Order.user_id == current_user.id)
-        .first()
-    )
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
-    if order.payment_status in {"SUCCESS", "LATE_SUCCESS", "verified"}:
-        raise HTTPException(status_code=400, detail="Payment already completed for this order")
-
-    expire_payment_if_needed(order, db)
-    if order.payment_status == "WAITING_FOR_PAYMENT" and order.expires_at and now_utc() <= order.expires_at:
-        raise HTTPException(status_code=400, detail="Current payment session is still active")
-
-    order = start_order_payment_session(order, db)
-    logger.info("payment session regenerated order_id=%s user_id=%s unique_amount=%s", order.id, current_user.id, order.unique_amount)
-    return {
-        "order_id": order.id,
-        "unique_amount": order.unique_amount,
-        "upi_link": generate_upi_link(order.unique_amount or order.total_amount),
-        "payment_status": order.payment_status,
-        "payment_started_at": order.payment_started_at.isoformat() if order.payment_started_at else None,
-        "expires_at": order.expires_at.isoformat() if order.expires_at else None,
-    }
-
-
-@app.get("/order/status/{order_id}")
-def get_phonepe_order_status(
-    order_id: int,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user),
-):
-    expire_stale_phonepe_orders(db)
-    order = (
-        db.query(models.Order)
-        .filter(models.Order.id == order_id, models.Order.user_id == current_user.id)
+        .filter(models.Order.id == payload.order_id, models.Order.user_id == current_user.id)
         .first()
     )
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
 
-    expire_payment_if_needed(order, db)
-    return {
-        "order_id": order.id,
-        "status": order.status,
-        "payment_status": order.payment_status,
-        "unique_amount": order.unique_amount,
-        "amount": order.amount or order.total_amount,
-        "user_name": order.user_name,
-        "phone_number": order.phone_number,
-        "hostel": order.hostel,
-        "expires_at": order.expires_at.isoformat() if order.expires_at else None,
-        "created_at": order.created_at.isoformat() if order.created_at else None,
-    }
-
-
-@app.post("/payment/phonepe")
-def receive_phonepe_notification(
-    payload: schemas.PhonePeNotification,
-    db: Session = Depends(get_db),
-    x_api_key: str | None = Header(default=None),
-):
-    if x_api_key != "batprint_secure_123":
-        raise HTTPException(status_code=401, detail="Invalid API key")
-
-    source = (payload.source or "").strip().lower()
-    raw_text = payload.raw_text or ""
-    logger.info("PHONEPE DATA: %s", raw_text)
-
-    if source != "phonepe":
-        return {"status": "ignored"}
-
-    if "₹" not in raw_text:
-        return {"status": "ignored"}
-
-    match = re.search(r"₹\s*(\d+(?:\.\d+)?)", raw_text)
-    if not match:
-        return {"status": "no amount"}
-
-    try:
-        extracted_amount = Decimal(match.group(1))
-    except InvalidOperation:
-        return {"status": "ignored"}
-
-    if extracted_amount != extracted_amount.to_integral_value():
-        return {"status": "ignored"}
-
-    amount = int(extracted_amount)
-    sender_segment = raw_text.split("₹", 1)[0]
-    sender_name = normalize_phonepe_text(
-        sender_segment.splitlines()[0] if sender_segment.splitlines() else sender_segment
-    )
-
-    expire_stale_phonepe_orders(db)
-    now = now_utc()
-    candidate_orders = (
+    duplicate_utr = (
         db.query(models.Order)
-        .filter(
-            models.Order.payment_status == "WAITING_FOR_PAYMENT",
-            models.Order.created_at >= now - timedelta(minutes=6),
-        )
-        .order_by(models.Order.created_at.desc())
-        .all()
+        .filter(models.Order.utr == utr_number, models.Order.id != order.id)
+        .first()
     )
+    if duplicate_utr:
+        order.fraud_flag = True
+        order.verification_notes = "Duplicate UTR submission blocked"
+        db.commit()
+        return {"success": False, "message": "This UTR number has already been used."}
 
-    matched_order = None
-    for order in candidate_orders:
-        if order.unique_amount is None:
-            continue
-        if int(round(float(order.unique_amount))) != amount:
-            continue
+    duplicate_transaction = (
+        db.query(models.Order)
+        .filter(models.Order.transaction_id == transaction_id, models.Order.id != order.id)
+        .first()
+    )
+    if duplicate_transaction:
+        order.fraud_flag = True
+        order.verification_notes = "Duplicate transaction ID submission blocked"
+        db.commit()
+        return {"success": False, "message": "This Transaction ID has already been used."}
 
-        order_name = normalize_phonepe_text(order.user_name or (order.user.username if order.user else ""))
-        if order_name and sender_name and order_name != sender_name:
-            continue
-
-        matched_order = order
-        break
-
-    if not matched_order:
-        return {"status": "ignored"}
-
-    matched_order.payment_status = "SUCCESS"
-    matched_order.status = "success"
-    matched_order.utr = raw_text[:120]
+    order.utr = utr_number
+    order.transaction_id = transaction_id
+    order.payment_status = "pending_verification"
+    order.status = "pending_verification"
+    order.fraud_flag = False
+    order.verification_notes = "Awaiting manual admin verification"
+    db.query(models.CartItem).filter(models.CartItem.user_id == order.user_id).delete()
     db.commit()
-    logger.info("phonepe payment matched order_id=%s amount=%s", matched_order.id, amount)
-    return {"status": "success", "order_id": matched_order.id, "amount": amount}
-
+    logger.info("payment verification submitted order_id=%s", order.id)
+    return {
+        "success": True,
+        "message": "Payment details submitted for verification.",
+        "order_id": order.id,
+    }
 
 @app.get("/my-orders")
 def my_orders(
@@ -1999,8 +1809,6 @@ def my_orders(
         .order_by(models.Order.created_at.desc())
         .all()
     )
-    for order in orders:
-        expire_payment_if_needed(order, db)
     return [serialize_order(order) for order in orders]
 
 
@@ -2122,7 +1930,7 @@ def delivery_orders(
             joinedload(models.Order.items).joinedload(models.OrderItem.upload),
             joinedload(models.Order.user),
         )
-        .filter(models.Order.status.in_(["ready", "printing"]))
+        .filter(models.Order.status.in_(["printing"]))
         .order_by(models.Order.created_at.desc())
         .all()
     )
@@ -2145,6 +1953,7 @@ def mark_delivery_order_delivered(
         raise HTTPException(status_code=404, detail="Order not found")
 
     order.status = "delivered"
+    order.payment_status = "delivered"
     db.commit()
     logger.info(
         "delivery order marked delivered user_id=%s role=%s order_id=%s",
@@ -2212,12 +2021,12 @@ def admin_analytics(
     current_user: models.User = Depends(get_current_admin_user),
 ):
     total_orders = db.query(func.count(models.Order.id)).scalar() or 0
-    pending_orders = db.query(func.count(models.Order.id)).filter(models.Order.status == "pending").scalar() or 0
+    pending_orders = db.query(func.count(models.Order.id)).filter(models.Order.status == "pending_verification").scalar() or 0
     printing_orders = db.query(func.count(models.Order.id)).filter(models.Order.status == "printing").scalar() or 0
     completed_orders = db.query(func.count(models.Order.id)).filter(models.Order.status == "delivered").scalar() or 0
     total_revenue = (
         db.query(func.coalesce(func.sum(models.Order.total_amount), 0))
-        .filter(models.Order.status.in_(["paid", "printing", "ready", "delivered"]))
+        .filter(models.Order.status.in_(["approved", "printing", "delivered"]))
         .scalar()
         or 0
     )
@@ -2246,7 +2055,7 @@ def admin_reset_revenue(
 ):
     gross_revenue = (
         db.query(func.coalesce(func.sum(models.Order.total_amount), 0))
-        .filter(models.Order.status.in_(["paid", "printing", "ready", "delivered"]))
+        .filter(models.Order.status.in_(["approved", "printing", "delivered"]))
         .scalar()
         or 0
     )
@@ -2275,6 +2084,15 @@ def update_order_status(
         raise HTTPException(status_code=404, detail="Order not found")
 
     order.status = status
+    order.payment_status = status
+    if status == "approved":
+        order.verification_notes = "Payment approved by admin"
+    elif status == "rejected":
+        order.verification_notes = "Payment rejected by admin"
+    elif status == "printing":
+        order.verification_notes = "Order moved to printing"
+    elif status == "delivered":
+        order.verification_notes = "Order delivered"
     db.commit()
     logger.info(
         "admin updated order status admin_id=%s order_id=%s status=%s",
@@ -2329,6 +2147,108 @@ def delete_order_item_file(
     db.commit()
     logger.info("admin deleted uploaded file admin_id=%s item_id=%s", current_user.id, item.id)
     return {"message": "Uploaded file deleted"}
+
+
+def build_excel_response(filename: str, headers: list[str], rows: list[list[object]]):
+    if Workbook is None:
+        buffer = BytesIO()
+        text_buffer = "\ufeff"
+        csv_rows = [headers, *rows]
+        for row in csv_rows:
+            output = BytesIO()
+            line = ",".join(
+                f'"{str(value).replace(chr(34), chr(34) + chr(34))}"'
+                for value in row
+            )
+            output.write((line + "\n").encode("utf-8"))
+            text_buffer += output.getvalue().decode("utf-8")
+        buffer.write(text_buffer.encode("utf-8"))
+        buffer.seek(0)
+        return StreamingResponse(
+            buffer,
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename.replace(".xlsx", ".csv")}"'},
+        )
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Export"
+    sheet.append(headers)
+    for row in rows:
+        sheet.append(row)
+
+    buffer = BytesIO()
+    workbook.save(buffer)
+    buffer.seek(0)
+    return StreamingResponse(
+        buffer,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/admin/payment-verification-excel")
+def admin_payment_verification_excel(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    orders = (
+        db.query(models.Order)
+        .filter(models.Order.utr.is_not(None))
+        .order_by(models.Order.created_at.desc())
+        .all()
+    )
+    rows = [
+        [
+            order.user_name or (order.user.username if order.user else ""),
+            order.phone_number or order.contact_number,
+            round(float(order.amount or order.total_amount or 0)),
+            order.utr or "",
+            order.transaction_id or "",
+            order.payment_status or order.status,
+        ]
+        for order in orders
+    ]
+    logger.info("admin exported payment verification excel admin_id=%s rows=%s", current_user.id, len(rows))
+    return build_excel_response(
+        "payment-verification.xlsx",
+        ["Name", "Phone", "Amount", "UTR", "Transaction ID", "Status"],
+        rows,
+    )
+
+
+@app.get("/admin/printing-excel")
+def admin_printing_excel(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    orders = (
+        db.query(models.Order)
+        .options(joinedload(models.Order.items))
+        .filter(models.Order.status.in_(["approved", "printing"]))
+        .order_by(models.Order.created_at.desc())
+        .all()
+    )
+    rows = []
+    for order in orders:
+        details = "; ".join(
+            f"{item.item_name or 'Unnamed item'} x{item.quantity} ({item.mode or '-'}, {item.print_type or '-'})"
+            for item in order.items
+        )
+        rows.append(
+            [
+                order.user_name or (order.user.username if order.user else ""),
+                order.hostel or order.hostel_name or "",
+                order.delivery_type,
+                details,
+            ]
+        )
+    logger.info("admin exported printing excel admin_id=%s rows=%s", current_user.id, len(rows))
+    return build_excel_response(
+        "printing-queue.xlsx",
+        ["Name", "Hostel", "Delivery Type", "Order Details"],
+        rows,
+    )
 
 
 @app.get("/admin/print-summary")
@@ -2473,5 +2393,6 @@ def admin_mark_printed_by_group(
     item_name, mode, print_type = decode_print_group_id(group_id)
     payload = schemas.PrintQueueAction(item_name=item_name, mode=mode, print_type=print_type)
     return admin_print_queue_complete(payload=payload, db=db, current_user=current_user)
+
 
 

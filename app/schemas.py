@@ -162,10 +162,19 @@ class CartItemCreate(BaseModel):
 
 
 class OrderCreate(BaseModel):
+    user_name: str = Field(min_length=2, max_length=120)
     delivery_type: Literal["hostel", "dayscholar"]
     hostel_name: Optional[str] = None
     contact_number: str = Field(min_length=10, max_length=10)
     alternate_contact_number: Optional[str] = None
+
+    @field_validator("user_name")
+    @classmethod
+    def validate_user_name(cls, value: str):
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Name is required")
+        return normalized
 
     @field_validator("hostel_name")
     @classmethod
@@ -188,12 +197,7 @@ class OrderCreate(BaseModel):
         return normalized
 
 
-class PhonePeNotification(BaseModel):
-    raw_text: str
-    source: str
-
-
-class PhonePeOrderCreate(BaseModel):
+class ManualOrderCreate(BaseModel):
     user_name: str = Field(min_length=2, max_length=120)
     phone_number: str = Field(min_length=10, max_length=10)
     hostel: str = Field(min_length=2, max_length=120)
@@ -220,6 +224,20 @@ class PhonePeOrderCreate(BaseModel):
             return None
         if not normalized.isdigit() or len(normalized) != 10:
             raise ValueError("Phone number must contain exactly 10 digits")
+        return normalized
+
+
+class PaymentVerificationCreate(BaseModel):
+    order_id: int
+    utr_number: str = Field(min_length=4, max_length=120)
+    transaction_id: str = Field(min_length=4, max_length=120)
+
+    @field_validator("utr_number", "transaction_id")
+    @classmethod
+    def validate_payment_reference(cls, value: str):
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Payment reference is required")
         return normalized
 
 
