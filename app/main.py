@@ -11,7 +11,7 @@ from io import BytesIO
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -99,6 +99,8 @@ def build_cors_origins() -> list[str]:
 
 
 CORS_ORIGINS = build_cors_origins()
+CORS_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+CORS_HEADERS = ["Accept", "Content-Type", "Authorization", "x-api-key", "X-Requested-With"]
 
 UPLOAD_DIR = Path("app/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -129,11 +131,25 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=CORS_METHODS,
+    allow_headers=CORS_HEADERS,
+    expose_headers=["Content-Disposition"],
+    max_age=86400,
 )
 
 logger.info("configured cors origins=%s", CORS_ORIGINS)
+
+
+@app.options("/{full_path:path}", include_in_schema=False)
+def preflight_handler(full_path: str):
+    return Response(
+        status_code=204,
+        headers={
+            "Access-Control-Allow-Methods": ", ".join(CORS_METHODS),
+            "Access-Control-Allow-Headers": ", ".join(CORS_HEADERS),
+            "Access-Control-Max-Age": "86400",
+        },
+    )
 
 
 @app.exception_handler(RequestValidationError)
@@ -886,6 +902,17 @@ def signup(user: schemas.UserCreate, db: Session = Depends(get_db)):
 def signup_alias(user: schemas.UserCreate, db: Session = Depends(get_db)):
     return signup(user=user, db=db)
 
+
+@app.post("/signup/")
+def signup_slash_alias(user: schemas.UserCreate, db: Session = Depends(get_db)):
+    return signup(user=user, db=db)
+
+
+@app.post("/auth/signup/")
+def signup_auth_slash_alias(user: schemas.UserCreate, db: Session = Depends(get_db)):
+    return signup(user=user, db=db)
+
+
 @app.post("/login")
 def login(
     request: Request,
@@ -938,6 +965,24 @@ def login(
 
 @app.post("/auth/login")
 def login_alias(
+    request: Request,
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db),
+):
+    return login(request=request, form_data=form_data, db=db)
+
+
+@app.post("/login/")
+def login_slash_alias(
+    request: Request,
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db),
+):
+    return login(request=request, form_data=form_data, db=db)
+
+
+@app.post("/auth/login/")
+def login_auth_slash_alias(
     request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
@@ -1347,6 +1392,11 @@ def get_cart(db: Session = Depends(get_db), current_user: models.User = Depends(
     return {"items": serialized, "total_amount": sum(item["total_price"] for item in serialized)}
 
 
+@app.get("/cart/")
+def get_cart_slash(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    return get_cart(db=db, current_user=current_user)
+
+
 @app.post("/cart/items")
 def add_to_cart(
     payload: schemas.CartItemCreate,
@@ -1471,6 +1521,15 @@ def add_to_cart(
     return serialize_cart_item(cart_item)
 
 
+@app.post("/cart/items/")
+def add_to_cart_slash(
+    payload: schemas.CartItemCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return add_to_cart(payload=payload, db=db, current_user=current_user)
+
+
 @app.delete("/cart/items/{item_id}")
 def remove_cart_item(
     item_id: int,
@@ -1488,6 +1547,15 @@ def remove_cart_item(
     db.delete(item)
     db.commit()
     return {"message": "Cart item removed"}
+
+
+@app.delete("/cart/items/{item_id}/")
+def remove_cart_item_slash(
+    item_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return remove_cart_item(item_id=item_id, db=db, current_user=current_user)
 
 
 @app.patch("/cart/items/{item_id}")
@@ -1523,6 +1591,17 @@ def update_cart_item(
     db.commit()
     db.refresh(item)
     return serialize_cart_item(item)
+
+
+@app.patch("/cart/items/{item_id}/")
+def update_cart_item_slash(
+    item_id: int,
+    payload: schemas.CartItemUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return update_cart_item(item_id=item_id, payload=payload, db=db, current_user=current_user)
+
 
 @app.post("/orders")
 def create_order(

@@ -35,7 +35,8 @@ export const postWithFallback = async (paths, data, config = {}) => {
     } catch (error) {
       lastError = error
 
-      if (error.response?.status !== 404 || path === paths[paths.length - 1]) {
+      const canTryNext = [404, 405].includes(error.response?.status)
+      if (!canTryNext || path === paths[paths.length - 1]) {
         throw error
       }
     }
@@ -61,5 +62,20 @@ API.interceptors.request.use((config) => {
 
   return config
 })
+
+API.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const status = error.response?.status
+    const url = typeof error.config?.url === "string" ? error.config.url : ""
+    const isAuthRequest = url.endsWith("/login") || url.endsWith("/signup")
+
+    if (status === 401 && !isAuthRequest) {
+      localStorage.removeItem("token")
+    }
+
+    return Promise.reject(error)
+  }
+)
 
 export default API
