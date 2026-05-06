@@ -1,4 +1,5 @@
 import axios from "axios"
+import { clearAuth, getToken, isLoggedIn } from "../utils/auth"
 
 const DEFAULT_API_BASE_URL = "https://demo-production-f9fb.up.railway.app"
 
@@ -26,6 +27,37 @@ const API = axios.create({
   baseURL: API_BASE_URL
 })
 
+const protectedPrefixes = [
+  "/admin",
+  "/api/uploads",
+  "/cart",
+  "/delivery",
+  "/me",
+  "/my-orders",
+  "/order/create",
+  "/orders",
+  "/payment",
+  "/support-threads",
+]
+
+const getRequestPath = (url = "") => {
+  try {
+    return new URL(url, API_BASE_URL).pathname.replace(/\/+$/, "") || "/"
+  } catch {
+    return String(url || "").split("?")[0].replace(/\/+$/, "") || "/"
+  }
+}
+
+const isAuthEndpoint = (url = "") => {
+  const path = getRequestPath(url)
+  return ["/login", "/auth/login", "/signup", "/auth/signup"].includes(path)
+}
+
+const isProtectedEndpoint = (url = "") => {
+  const path = getRequestPath(url)
+  return protectedPrefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`))
+}
+
 export const postWithFallback = async (paths, data, config = {}) => {
   let lastError
 
@@ -46,17 +78,19 @@ export const postWithFallback = async (paths, data, config = {}) => {
 }
 
 API.interceptors.request.use((config) => {
-  const token = localStorage.getItem("token")
   const url = typeof config.url === "string" ? config.url : ""
-  const isAuthRequest =
-    url === "/login" ||
-    url === "/auth/login" ||
-    url === "/signup" ||
-    url === "/auth/signup" ||
-    url.endsWith("/login") ||
-    url.endsWith("/signup")
+  const isAuthRequest = isAuthEndpoint(url)
 
+  if (!isAuthRequest && isProtectedEndpoint(url) && !isLoggedIn()) {
+    const authError = new axios.CanceledError("Please login to continue")
+    authError.code = "AUTH_REQUIRED"
+    authError.config = config
+    return Promise.reject(authError)
+  }
+
+  const token = getToken()
   if (token && !isAuthRequest) {
+    config.headers = config.headers || {}
     config.headers.Authorization = `Bearer ${token}`
   }
 
@@ -68,10 +102,10 @@ API.interceptors.response.use(
   (error) => {
     const status = error.response?.status
     const url = typeof error.config?.url === "string" ? error.config.url : ""
-    const isAuthRequest = url.endsWith("/login") || url.endsWith("/signup")
+    const isAuthRequest = isAuthEndpoint(url)
 
     if (status === 401 && !isAuthRequest) {
-      localStorage.removeItem("token")
+      clearAuth()
     }
 
     return Promise.reject(error)

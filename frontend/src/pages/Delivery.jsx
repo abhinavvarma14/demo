@@ -1,14 +1,23 @@
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import API from "../api/api"
 import toast from "react-hot-toast"
+import { useNavigate } from "react-router-dom"
+import { isLoggedIn } from "../utils/auth"
 import { getApiErrorMessage } from "../utils/apiError"
 
 function Delivery() {
+  const navigate = useNavigate()
   const [orders, setOrders] = useState([])
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState("")
 
-  const fetchOrders = async () => {
+  const fetchOrders = useCallback(async () => {
+    if (!isLoggedIn()) {
+      setLoading(false)
+      navigate("/login", { replace: true })
+      return
+    }
+
     try {
       const res = await API.get("/delivery/orders")
       setOrders(res.data)
@@ -18,11 +27,11 @@ function Delivery() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [navigate])
 
   useEffect(() => {
     fetchOrders()
-  }, [])
+  }, [fetchOrders])
 
   const markDelivered = async (orderId) => {
     try {

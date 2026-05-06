@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import API, { API_BASE_URL } from "../api/api"
 import toast from "react-hot-toast"
+import { isLoggedIn } from "../utils/auth"
 import { getApiErrorMessage } from "../utils/apiError"
 
 const tabs = [
@@ -70,6 +71,11 @@ function Admin({ defaultSection = "verification" }) {
   }
 
   const refreshAdminData = async () => {
+    if (!isLoggedIn()) {
+      navigate("/login", { replace: true })
+      return
+    }
+
     try {
       await Promise.all([fetchOrders(), fetchBanners(), fetchAnalytics()])
     } catch (error) {

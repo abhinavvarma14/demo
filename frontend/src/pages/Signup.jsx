@@ -61,9 +61,13 @@ try {
   const detail = error.response?.data?.detail
 
   if (error.response?.status === 409) {
-    setUsernameError("Username already exists. Please choose another.")
+    setUsernameError("User already exists")
   } else if (error.response?.status === 422) {
     setPasswordError(detail || "Password must be at least 4 characters")
+  } else if (!error.response) {
+    setFormError("Network issue. Please check your connection and try again.")
+  } else if (error.response.status >= 500) {
+    setFormError("Server error. Please try again shortly.")
   } else {
     setFormError(getApiErrorMessage(error, "Signup failed"))
   }

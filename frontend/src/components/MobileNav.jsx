@@ -27,6 +27,9 @@ useEffect(() => {
   }
 
   fetchCartCount()
+
+  window.addEventListener("auth-changed", fetchCartCount)
+  return () => window.removeEventListener("auth-changed", fetchCartCount)
 }, [location.pathname])
 
 if(location.pathname.startsWith("/admin")){
@@ -36,15 +39,24 @@ if(location.pathname.startsWith("/admin")){
 const active = (path) => location.pathname === path
 
 const handleProfileClick = () => {
-
-if(isLoggedIn()){
-  navigate("/profile")
+  if(isLoggedIn()){
+    navigate("/profile")
+  }
+  else{
+    toast.error("Please login to continue")
+    navigate("/login")
+  }
 }
-else{
+
+const handleProtectedNav = (path) => {
+  if (isLoggedIn()) {
+    navigate(path)
+    return
+  }
+
+  setCartCount(0)
   toast.error("Please login to continue")
   navigate("/login")
-}
-
 }
 
 return(
@@ -79,7 +91,7 @@ return(
     {/* Cart */}
 
     <button
-      onClick={()=>navigate("/cart")}
+      onClick={()=>handleProtectedNav("/cart")}
       className={`relative flex flex-col items-center text-xs transition
       ${active("/cart") ? "text-yellow-400" : "text-gray-400"}`}
     >
@@ -96,7 +108,7 @@ return(
     </button>
 
     <button
-      onClick={()=>navigate("/orders")}
+      onClick={()=>handleProtectedNav("/orders")}
       className={`flex flex-col items-center text-xs transition
       ${active("/orders") ? "text-yellow-400" : "text-gray-400"}`}
     >

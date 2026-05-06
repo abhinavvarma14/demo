@@ -27,6 +27,9 @@ function BottomNav() {
     }
 
     fetchCartCount()
+
+    window.addEventListener("auth-changed", fetchCartCount)
+    return () => window.removeEventListener("auth-changed", fetchCartCount)
   }, [location.pathname])
 
   if (location.pathname.startsWith("/admin")) {
@@ -44,9 +47,19 @@ function BottomNav() {
     navigate("/profile")
   }
 
+  const goToCart = () => {
+    if (!isLoggedIn()) {
+      setCartCount(0)
+      toast.error("Please login to continue")
+      navigate("/login")
+      return
+    }
+    navigate("/cart")
+  }
+
   const items = [
     { label: "Home", icon: Home, onClick: () => navigate("/"), active: isActive("/") },
-    { label: "Cart", icon: ShoppingCart, onClick: () => navigate("/cart"), active: isActive("/cart"), badge: cartCount },
+    { label: "Cart", icon: ShoppingCart, onClick: goToCart, active: isActive("/cart"), badge: cartCount },
     { label: "Profile", icon: User, onClick: goToProfile, active: isActive("/profile") || isActive("/login") },
   ]
 

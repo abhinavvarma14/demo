@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import API from "../api/api"
 import toast from "react-hot-toast"
+import { isLoggedIn } from "../utils/auth"
 import { getApiErrorMessage } from "../utils/apiError"
 
 function Cart() {
@@ -11,7 +12,15 @@ function Cart() {
   const [loading, setLoading] = useState(true)
   const [updatingId, setUpdatingId] = useState(null)
 
-  const fetchCart = async () => {
+  const fetchCart = useCallback(async () => {
+    if (!isLoggedIn()) {
+      setLoading(false)
+      setCart([])
+      setTotal(0)
+      navigate("/login", { replace: true })
+      return
+    }
+
     try {
       const res = await API.get("/cart")
       setCart(res.data.items)
@@ -27,13 +36,19 @@ function Cart() {
       } finally {
         setLoading(false)
     }
-  }
+  }, [navigate])
 
   useEffect(() => {
     fetchCart()
-  }, [])
+  }, [fetchCart])
 
   const removeItem = async (id) => {
+    if (!isLoggedIn()) {
+      toast.error("Please login to continue")
+      navigate("/login")
+      return
+    }
+
     try {
       await API.delete(`/cart/items/${id}`)
       toast.success("Removed from cart")
@@ -45,6 +60,12 @@ function Cart() {
   }
 
   const updateQuantity = async (item, nextQuantity) => {
+    if (!isLoggedIn()) {
+      toast.error("Please login to continue")
+      navigate("/login")
+      return
+    }
+
     if (nextQuantity <= 0) {
       return removeItem(item.id)
     }

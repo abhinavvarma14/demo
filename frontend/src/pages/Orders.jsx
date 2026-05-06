@@ -1,14 +1,23 @@
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import API from "../api/api"
 import toast from "react-hot-toast"
+import { useNavigate } from "react-router-dom"
+import { isLoggedIn } from "../utils/auth"
 import { getApiErrorMessage } from "../utils/apiError"
 
 function Orders(){
+  const navigate = useNavigate()
   const [orders,setOrders] = useState([])
   const [loading, setLoading] = useState(true)
   const statusSteps = ["pending_verification", "approved", "printing", "delivered"]
 
-  const fetchOrders = async () => {
+  const fetchOrders = useCallback(async () => {
+    if (!isLoggedIn()) {
+      setLoading(false)
+      navigate("/login", { replace: true })
+      return
+    }
+
     try {
       const res = await API.get("/my-orders")
       setOrders(res.data)
@@ -18,11 +27,11 @@ function Orders(){
     } finally {
       setLoading(false)
     }
-  }
+  }, [navigate])
 
   useEffect(() => {
     fetchOrders()
-  }, [])
+  }, [fetchOrders])
 
   return (
     <div className="pt-24 pb-24 px-4">

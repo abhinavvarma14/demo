@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from "framer-motion"
 import { useNavigate } from "react-router-dom"
 import API from "../api/api"
 import toast from "react-hot-toast"
-import { getUsername } from "../utils/auth"
+import { clearAuth, getUsername, isLoggedIn } from "../utils/auth"
 import { getApiErrorMessage } from "../utils/apiError"
 
 function ProfilePage() {
@@ -19,6 +19,12 @@ function ProfilePage() {
 
   useEffect(() => {
     const load = async () => {
+      if (!isLoggedIn()) {
+        setLoading(false)
+        navigate("/login", { replace: true })
+        return
+      }
+
       try {
         const [profileRes, ordersRes, supportRes] = await Promise.all([
           API.get("/me"),
@@ -37,7 +43,7 @@ function ProfilePage() {
     }
 
     load()
-  }, [])
+  }, [navigate])
 
   const submitSupportThread = async () => {
     if (!supportMessage.trim()) {
@@ -88,7 +94,7 @@ function ProfilePage() {
   }
 
   const handleLogout = () => {
-    localStorage.removeItem("token")
+    clearAuth()
     toast.success("Logged out successfully")
     navigate("/login")
   }

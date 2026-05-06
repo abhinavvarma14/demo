@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from "framer-motion"
 import { useNavigate } from "react-router-dom"
 import { postWithFallback } from "../api/api"
 import toast from "react-hot-toast"
-import { getUserRole } from "../utils/auth"
+import { getUserRole, setToken } from "../utils/auth"
 import { getApiErrorMessage } from "../utils/apiError"
 
 function Login() {
@@ -44,7 +44,13 @@ try {
     }
   })
 
-  localStorage.setItem("token", res.data.access_token)
+  const token = res.data?.access_token || res.data?.token
+  if (!token) {
+    setFormError("Server error. Login token was not returned.")
+    return
+  }
+
+  setToken(token)
 
   toast.success("Login successful")
 
@@ -59,14 +65,19 @@ try {
 } catch (error) {
 
   console.log(error)
+  const status = error.response?.status
   const detail = error.response?.data?.detail
 
-  if (error.response?.status === 404) {
-    setFormError("No user found. Please sign up.")
-  } else if (error.response?.status === 401) {
-    setFormError("Incorrect password.")
-  } else if (error.response?.status === 429) {
+  if (!error.response) {
+    setFormError("Network issue. Please check your connection and try again.")
+  } else if (status === 404) {
+    setFormError("User not found. Please sign up.")
+  } else if (status === 401 || status === 400) {
+    setFormError("Invalid credentials.")
+  } else if (status === 429) {
     setFormError(detail || "Too many login attempts. Try again later.")
+  } else if (status >= 500) {
+    setFormError("Server error. Please try again shortly.")
   } else {
     setFormError(detail || getApiErrorMessage(error, "Login failed"))
   }

@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom"
 import toast from "react-hot-toast"
 
 import API from "../api/api"
+import { isLoggedIn } from "../utils/auth"
 import { getApiErrorMessage } from "../utils/apiError"
 
 const UPI_ID = "9052612456-3@ybl"
@@ -31,6 +32,11 @@ function Checkout() {
 
   useEffect(() => {
     const loadCartTotal = async () => {
+      if (!isLoggedIn()) {
+        navigate("/login", { replace: true })
+        return
+      }
+
       try {
         const res = await API.get("/cart")
         setTotal(Number(res.data.total_amount || 0))
@@ -62,6 +68,12 @@ function Checkout() {
   }
 
   const createOrder = async () => {
+    if (!isLoggedIn()) {
+      toast.error("Please login to continue")
+      navigate("/login")
+      return
+    }
+
     const validationMessage = validateDetails()
     if (validationMessage) {
       toast.error(validationMessage)
@@ -102,6 +114,12 @@ function Checkout() {
   }
 
   const submitVerification = async () => {
+    if (!isLoggedIn()) {
+      toast.error("Please login to continue")
+      navigate("/login")
+      return
+    }
+
     if (!paymentForm.utrNumber.trim()) {
       toast.error("UTR number is required")
       return

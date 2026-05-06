@@ -16,18 +16,41 @@ const decodeTokenPayload = (token) => {
 
 export const getToken = () => localStorage.getItem("token")
 
-export const isLoggedIn = () => !!getToken()
+export const setToken = (token) => {
+  if (!token) return
+  localStorage.setItem("token", token)
+  window.dispatchEvent(new Event("auth-changed"))
+}
 
-export const getUserRole = () => {
+export const clearAuth = () => {
+  localStorage.removeItem("token")
+  window.dispatchEvent(new Event("auth-changed"))
+}
+
+const getValidTokenPayload = () => {
   const token = getToken()
   if (!token) return null
 
-  return decodeTokenPayload(token)?.role || null
+  const payload = decodeTokenPayload(token)
+  if (!payload) {
+    clearAuth()
+    return null
+  }
+
+  if (payload.exp && payload.exp * 1000 <= Date.now()) {
+    clearAuth()
+    return null
+  }
+
+  return payload
+}
+
+export const isLoggedIn = () => !!getValidTokenPayload()
+
+export const getUserRole = () => {
+  return getValidTokenPayload()?.role || null
 }
 
 export const getUsername = () => {
-  const token = getToken()
-  if (!token) return null
-
-  return decodeTokenPayload(token)?.username || null
+  return getValidTokenPayload()?.username || null
 }
