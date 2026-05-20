@@ -65,6 +65,13 @@ if _railway_public_domain:
 else:
     _backend_origin = "https://demo-production-f9fb.up.railway.app"
 
+_railway_public_domain = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
+_railway_origin = (
+    f"https://{_railway_public_domain}"
+    if _railway_public_domain
+    else "https://web-production-65350.up.railway.app"
+)
+
 DEFAULT_CORS_ORIGINS = [
     "https://demo-ashy-sigma.vercel.app",
     "https://batprint.vercel.app",
@@ -75,6 +82,7 @@ DEFAULT_CORS_ORIGINS = [
     "http://localhost:5173",
     "http://localhost:3000",
     "http://127.0.0.1:5173",
+    _railway_origin,
 ]
 
 def build_cors_origins() -> list[str]:
