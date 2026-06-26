@@ -1,7 +1,7 @@
 import axios from "axios"
 import { clearAuth, getToken, isLoggedIn } from "../utils/auth"
 
-const DEFAULT_API_BASE_URL = "https://demo-production-f9fb.up.railway.app"
+const DEFAULT_API_BASE_URL = "https://demo-production-902a.up.railway.app"
 const LOCAL_API_BASE_URL = "http://127.0.0.1:8000"
 
 const isLocalFrontend = () =>

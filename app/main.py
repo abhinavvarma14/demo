@@ -68,7 +68,7 @@ if _railway_public_domain:
     )
     _backend_origin = f"https://{_railway_public_domain}"
 else:
-    _backend_origin = "https://demo-production-f9fb.up.railway.app"
+    _backend_origin = "https://demo-production-902a.up.railway.app"
 
 DEFAULT_CORS_ORIGINS = [
     "https://demo-ashy-sigma.vercel.app",
