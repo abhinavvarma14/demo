@@ -16,6 +16,23 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
+      workbox: {
+        cleanupOutdatedCaches: true,
+        clientsClaim: true,
+        skipWaiting: true,
+        navigateFallback: '/index.html',
+        navigateFallbackDenylist: [
+          /^\/assets\//,
+          /^\/api\//,
+          /^\/uploads\//,
+          /^\/ads\.txt$/,
+          /^\/robots\.txt$/,
+          /^\/sitemap\.xml$/,
+          /^\/manifest\.webmanifest$/,
+          /^\/sw\.js$/,
+          /\.[^/]+$/,
+        ],
+      },
       manifest: {
         name: 'BatPrint',
         short_name: 'BatPrint',

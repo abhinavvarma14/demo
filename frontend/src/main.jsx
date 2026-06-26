@@ -6,7 +6,18 @@ import './index.css'
 const registerServiceWorkerWhenIdle = () => {
   const run = async () => {
     const { registerSW } = await import('virtual:pwa-register')
-    registerSW({ immediate: true })
+    const updateSW = registerSW({
+      immediate: true,
+      onNeedRefresh() {
+        updateSW(true)
+      },
+      onRegisteredSW(_swUrl, registration) {
+        if (!registration) return
+        window.setInterval(() => {
+          registration.update()
+        }, 60 * 60 * 1000)
+      },
+    })
   }
 
   if ('requestIdleCallback' in window) {
