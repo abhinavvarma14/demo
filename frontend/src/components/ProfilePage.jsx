@@ -101,7 +101,7 @@ function ProfilePage() {
 
   return (
     <div className="px-4 pb-28 pt-24">
-      <div className="rounded-[28px] border border-white/10 bg-[#111111] p-5 shadow-[0_24px_60px_rgba(0,0,0,0.28)] backdrop-blur-xl">
+      <div className="premium-card rounded-[28px] border border-white/10 bg-[#111111] p-5 shadow-[0_24px_60px_rgba(0,0,0,0.28)] backdrop-blur-xl">
         <p className="text-xs uppercase tracking-[0.34em] text-white/35">
           Profile
         </p>
@@ -113,7 +113,7 @@ function ProfilePage() {
         </p>
 
         <div className="mt-5 grid gap-3">
-          <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+          <div className="premium-card rounded-2xl border border-white/10 bg-black/20 p-4">
             <p className="text-sm text-white/45">User details</p>
             <p className="mt-2 text-lg font-medium text-white">{username}</p>
           </div>

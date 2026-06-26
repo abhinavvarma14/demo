@@ -155,7 +155,7 @@ function Upload() {
 
       <div
         {...getRootProps()}
-        className="border border-dashed border-yellow-400/40 rounded-2xl p-10 text-center bg-white/5 backdrop-blur-md cursor-pointer hover:border-yellow-400 transition"
+        className="premium-card premium-interactive border border-dashed border-yellow-400/40 rounded-2xl p-10 text-center bg-white/5 backdrop-blur-md cursor-pointer hover:border-yellow-400 transition"
       >
         <input {...getInputProps()} />
 

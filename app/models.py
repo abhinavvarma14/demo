@@ -110,6 +110,21 @@ class CartItem(Base):
     book = relationship("Book", back_populates="cart_items")
 
 
+class PrintBatch(Base):
+    __tablename__ = "print_batches"
+
+    id = Column(Integer, primary_key=True, index=True)
+    batch_id = Column(String, unique=True, index=True, nullable=False)
+    status = Column(String, default="created", index=True)  # created, printing, ready_for_delivery, delivered
+    total_orders = Column(Integer, default=0)
+    total_revenue = Column(Float, default=0)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    printing_started_at = Column(DateTime, nullable=True)
+    delivery_ready_at = Column(DateTime, nullable=True)
+
+    orders = relationship("Order", back_populates="batch")
+
+
 class Order(Base):
     __tablename__ = "orders"
 
@@ -127,16 +142,22 @@ class Order(Base):
     payment_status = Column(String, default="pending")
     payment_method = Column(String, default="UPI")
     utr = Column(String, nullable=True)
+    utr_number = Column(String, nullable=True, index=True)
     transaction_id = Column(String, nullable=True, index=True)
     fraud_flag = Column(Boolean, default=False)
     verification_notes = Column(String, nullable=True)
     status = Column(String, default="pending", index=True)
     unique_amount = Column(Float, nullable=True, index=True)
+    batch_ref_id = Column(Integer, ForeignKey("print_batches.id"), nullable=True, index=True)
+    printing_started_at = Column(DateTime, nullable=True)
+    delivery_ready_at = Column(DateTime, nullable=True)
+    delivered_at = Column(DateTime, nullable=True)
     payment_started_at = Column(DateTime, nullable=True)
     expires_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     user = relationship("User", back_populates="orders")
+    batch = relationship("PrintBatch", back_populates="orders")
     items = relationship("OrderItem", back_populates="order", cascade="all, delete")
 
 

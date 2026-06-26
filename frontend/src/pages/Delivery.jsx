@@ -63,10 +63,11 @@ function Delivery() {
         </p>
       )}
 
+      <div className="stagger-list">
       {!loading && orders.map((order) => (
         <div
           key={order.id}
-          className="mb-4 rounded-xl border border-white/10 bg-white/5 p-4"
+          className="premium-card mb-4 rounded-xl border border-white/10 bg-white/5 p-4"
         >
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -133,6 +134,7 @@ function Delivery() {
           </button>
         </div>
       ))}
+      </div>
     </div>
   )
 }

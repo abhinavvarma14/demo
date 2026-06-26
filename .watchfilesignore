@@ -1,0 +1,6 @@
+tests/
+app/uploads/
+venv/
+.git/
+__pycache__/
+*.pyc

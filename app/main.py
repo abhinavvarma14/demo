@@ -5,10 +5,13 @@ import logging
 import base64
 import random
 import time
+import zipfile
 from datetime import datetime, timezone, timedelta
 from contextlib import asynccontextmanager
 from io import BytesIO
 from pathlib import Path
+from urllib.parse import quote
+from xml.sax.saxutils import escape
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
@@ -28,8 +31,10 @@ try:
 except ImportError:  # Local dev can still run before requirements are installed.
     Workbook = None
 
-load_dotenv()
+import asyncio
+from fastapi.concurrency import run_in_threadpool
 
+load_dotenv()
 from . import models, schemas
 from .database import SessionLocal, get_engine, init_engine
 
@@ -115,14 +120,26 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 async def lifespan(_: FastAPI):
     # Initialize DB engine at startup so Neon/Railway connection issues are logged clearly.
     engine = init_engine(logger=logger)
-    models.Base.metadata.create_all(bind=engine)
-    sync_schema()
-    db = SessionLocal()
+
+    def init_db():
+        models.Base.metadata.create_all(bind=engine)
+        sync_schema()
+        db = SessionLocal()
+        try:
+            migrate_legacy_passwords(db)
+            seed_defaults()
+        finally:
+            db.close()
+
     try:
-        migrate_legacy_passwords(db)
-    finally:
-        db.close()
-    seed_defaults()
+        logger.info("Starting synchronous DB initializations...")
+        await asyncio.wait_for(run_in_threadpool(init_db), timeout=15.0)
+        logger.info("DB initializations completed successfully.")
+    except asyncio.TimeoutError:
+        logger.error("Startup DB init timed out after 15 seconds. There might be a database lock or connectivity issue.")
+    except Exception as e:
+        logger.error(f"Startup DB init failed: {e}")
+        
     yield
 
 
@@ -383,8 +400,15 @@ VALID_ORDER_STATUSES = {
     "pending_verification",
     "approved",
     "rejected",
+    "batched",
     "printing",
+    "ready_for_delivery",
     "delivered",
+}
+
+LEGACY_ORDER_STATUS_ALIASES = {
+    "paid": "approved",
+    "ready": "printing",
 }
 
 
@@ -486,10 +510,15 @@ def sync_schema():
             "payment_status": "ALTER TABLE orders ADD COLUMN payment_status VARCHAR DEFAULT 'pending'",
             "payment_method": "ALTER TABLE orders ADD COLUMN payment_method VARCHAR DEFAULT 'UPI'",
             "utr": "ALTER TABLE orders ADD COLUMN utr VARCHAR",
+            "utr_number": "ALTER TABLE orders ADD COLUMN utr_number VARCHAR",
             "transaction_id": "ALTER TABLE orders ADD COLUMN transaction_id VARCHAR",
             "fraud_flag": "ALTER TABLE orders ADD COLUMN fraud_flag BOOLEAN DEFAULT FALSE",
             "verification_notes": "ALTER TABLE orders ADD COLUMN verification_notes VARCHAR",
             "unique_amount": "ALTER TABLE orders ADD COLUMN unique_amount FLOAT",
+            "batch_ref_id": "ALTER TABLE orders ADD COLUMN batch_ref_id INTEGER",
+            "printing_started_at": "ALTER TABLE orders ADD COLUMN printing_started_at TIMESTAMP",
+            "delivery_ready_at": "ALTER TABLE orders ADD COLUMN delivery_ready_at TIMESTAMP",
+            "delivered_at": "ALTER TABLE orders ADD COLUMN delivered_at TIMESTAMP",
             "payment_started_at": "ALTER TABLE orders ADD COLUMN payment_started_at TIMESTAMP",
             "expires_at": "ALTER TABLE orders ADD COLUMN expires_at TIMESTAMP",
         },
@@ -506,6 +535,9 @@ def sync_schema():
     }
 
     with engine.begin() as connection:
+        if engine.dialect.name == "postgresql":
+            connection.execute(text("SET lock_timeout = '5s'"))
+        
         for table_name, ddl_map in expected_columns.items():
             if table_name not in inspector.get_table_names():
                 continue
@@ -662,7 +694,7 @@ def serialize_admin_book(book: models.Book):
 def serialize_banner(banner: models.Banner):
     return {
         "id": banner.id,
-        "image": banner.image_url,
+        "image_url": banner.image_url,
         "title": banner.title,
         "subtitle": banner.subtitle,
         "link": banner.link,
@@ -750,6 +782,7 @@ def serialize_order_item(item: models.OrderItem):
 
 
 def serialize_order(order: models.Order, include_user: bool = False):
+    batch = order.batch if hasattr(order, "batch") and order.batch else None
     payload = {
         "id": order.id,
         "user_name": order.user_name,
@@ -765,11 +798,16 @@ def serialize_order(order: models.Order, include_user: bool = False):
         "payment_status": order.payment_status,
         "payment_method": order.payment_method,
         "utr": order.utr,
-        "utr_number": order.utr,
+        "utr_number": getattr(order, "utr_number", None) or order.utr,
         "transaction_id": order.transaction_id,
         "fraud_flag": bool(order.fraud_flag),
         "verification_notes": order.verification_notes,
         "status": order.status,
+        "batch_id": batch.batch_id if batch else None,
+        "batch_ref_id": getattr(order, "batch_ref_id", None),
+        "printing_started_at": order.printing_started_at.isoformat() if getattr(order, "printing_started_at", None) else None,
+        "delivery_ready_at": order.delivery_ready_at.isoformat() if getattr(order, "delivery_ready_at", None) else None,
+        "delivered_at": order.delivered_at.isoformat() if getattr(order, "delivered_at", None) else None,
         "payment_started_at": order.payment_started_at.isoformat() if order.payment_started_at else None,
         "expires_at": order.expires_at.isoformat() if order.expires_at else None,
         "created_at": order.created_at.isoformat() if order.created_at else None,
@@ -877,6 +915,7 @@ def serialize_support_thread(thread: models.SupportThread, include_user: bool = 
         "messages": [serialize_support_message(message) for message in thread.messages],
     }
     if include_user:
+        payload["username"] = thread.user.username if thread.user else ""
         payload["user"] = {
             "id": thread.user.id if thread.user else None,
             "username": thread.user.username if thread.user else "",
@@ -912,6 +951,11 @@ def cleanup_order_upload_files(order: models.Order, db: Session):
 @app.get("/")
 def root():
     return {"message": "Batman backend running"}
+
+
+@app.get("/health", include_in_schema=False)
+def health_check():
+    return Response(content="OK", media_type="text/plain")
 
 @app.post("/signup")
 def signup(user: schemas.UserCreate, db: Session = Depends(get_db)):
@@ -1162,7 +1206,7 @@ def get_admin_banners(
     return [serialize_banner(banner) for banner in banners]
 
 
-@app.post("/api/banners")
+@app.post("/admin/banners")
 async def create_banner(
     image: UploadFile = File(...),
     title: str | None = Form(None),
@@ -1190,7 +1234,7 @@ async def create_banner(
     return serialize_banner(banner)
 
 
-@app.put("/api/banners/{banner_id}")
+@app.put("/admin/banners/{banner_id}")
 async def update_banner(
     banner_id: str,
     image: UploadFile | None = File(None),
@@ -1235,7 +1279,7 @@ async def update_banner(
     return serialize_banner(banner)
 
 
-@app.delete("/api/banners/{banner_id}")
+@app.delete("/admin/banners/{banner_id}")
 def delete_banner(
     banner_id: str,
     db: Session = Depends(get_db),
@@ -1659,7 +1703,7 @@ def create_order(
     total_amount = sum((item.total_price or item.calculated_price or 0) for item in cart_items)
     new_order = models.Order(
         user_id=current_user.id,
-        user_name=order.user_name,
+        user_name=order.user_name or current_user.username,
         phone_number=order.contact_number,
         hostel=order.hostel_name if order.delivery_type == "hostel" else "Day Scholar",
         delivery_type=order.delivery_type,
@@ -1805,6 +1849,43 @@ def create_api_order(
     logger.info("api order created order_id=%s user_id=%s total=%s", order.id, user.id, total_amount)
     return {"order_id": order.id, "total_amount": order.total_amount}
 
+def _find_duplicate_payment_reference(db: Session, order_id: int, utr_number: str, transaction_id: str):
+    normalized_utr = utr_number.strip().lower()
+    normalized_transaction_id = transaction_id.strip().lower()
+    duplicate_utr = (
+        db.query(models.Order)
+        .filter(
+            models.Order.id != order_id,
+            or_(
+                func.lower(models.Order.utr) == normalized_utr,
+                func.lower(models.Order.utr_number) == normalized_utr,
+            ),
+        )
+        .first()
+    )
+    if duplicate_utr:
+        return "UTR already exists"
+
+    duplicate_transaction = (
+        db.query(models.Order)
+        .filter(
+            models.Order.id != order_id,
+            func.lower(models.Order.transaction_id) == normalized_transaction_id,
+        )
+        .first()
+    )
+    if duplicate_transaction:
+        return "Transaction ID already exists"
+
+    return None
+
+
+def _mark_duplicate_payment_attempt(db: Session, order: models.Order, message: str):
+    order.fraud_flag = True
+    order.verification_notes = message
+    db.commit()
+    raise HTTPException(status_code=409, detail=message)
+
 
 @app.post("/api/orders/verify")
 def verify_api_order(
@@ -1815,10 +1896,20 @@ def verify_api_order(
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
 
-    order.utr = payload.utr.strip()
+    utr_number = payload.utr_number.strip()
+    transaction_id = payload.transaction_id.strip()
+    duplicate_message = _find_duplicate_payment_reference(db, order.id, utr_number, transaction_id)
+    if duplicate_message:
+        _mark_duplicate_payment_attempt(db, order, duplicate_message)
+
+    order.utr = utr_number
+    order.utr_number = utr_number
+    order.transaction_id = transaction_id
     order.payment_status = "pending_verification"
     order.payment_method = "UPI"
     order.status = "pending_verification"
+    order.fraud_flag = False
+    order.verification_notes = "Awaiting manual admin verification"
     db.query(models.CartItem).filter(models.CartItem.user_id == order.user_id).delete()
     db.commit()
     logger.info("api order verified order_id=%s", order.id)
@@ -1874,29 +1965,12 @@ def submit_payment_verification(
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
 
-    duplicate_utr = (
-        db.query(models.Order)
-        .filter(models.Order.utr == utr_number, models.Order.id != order.id)
-        .first()
-    )
-    if duplicate_utr:
-        order.fraud_flag = True
-        order.verification_notes = "Duplicate UTR submission blocked"
-        db.commit()
-        return {"success": False, "message": "This UTR number has already been used."}
-
-    duplicate_transaction = (
-        db.query(models.Order)
-        .filter(models.Order.transaction_id == transaction_id, models.Order.id != order.id)
-        .first()
-    )
-    if duplicate_transaction:
-        order.fraud_flag = True
-        order.verification_notes = "Duplicate transaction ID submission blocked"
-        db.commit()
-        return {"success": False, "message": "This Transaction ID has already been used."}
+    duplicate_message = _find_duplicate_payment_reference(db, order.id, utr_number, transaction_id)
+    if duplicate_message:
+        _mark_duplicate_payment_attempt(db, order, duplicate_message)
 
     order.utr = utr_number
+    order.utr_number = utr_number
     order.transaction_id = transaction_id
     order.payment_status = "pending_verification"
     order.status = "pending_verification"
@@ -2132,6 +2206,47 @@ def admin_reply_support_thread(
     return serialize_support_thread(thread, include_user=True)
 
 
+@app.get("/admin/support-threads/{thread_id}/messages")
+def admin_support_thread_messages(
+    thread_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    thread = (
+        db.query(models.SupportThread)
+        .options(joinedload(models.SupportThread.messages))
+        .filter(models.SupportThread.id == thread_id)
+        .first()
+    )
+    if not thread:
+        raise HTTPException(status_code=404, detail="Support thread not found")
+
+    return [
+        {
+            "id": message.id,
+            "sender_role": message.sender_role,
+            "message": message.message,
+            "created_at": message.created_at.isoformat() if message.created_at else None,
+        }
+        for message in sorted(thread.messages, key=lambda item: item.created_at or datetime.min)
+    ]
+
+
+@app.post("/admin/support-threads/{thread_id}/messages")
+def admin_add_support_thread_message(
+    thread_id: int,
+    payload: schemas.SupportMessageCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    return admin_reply_support_thread(
+        thread_id=thread_id,
+        payload=payload,
+        db=db,
+        current_user=current_user,
+    )
+
+
 @app.get("/admin/analytics")
 def admin_analytics(
     db: Session = Depends(get_db),
@@ -2188,6 +2303,7 @@ def update_order_status(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_admin_user),
 ):
+    status = LEGACY_ORDER_STATUS_ALIASES.get(status, status)
     if status not in VALID_ORDER_STATUSES:
         raise HTTPException(status_code=400, detail="Invalid order status")
 
@@ -2266,41 +2382,105 @@ def delete_order_item_file(
     return {"message": "Uploaded file deleted"}
 
 
-def build_excel_response(filename: str, headers: list[str], rows: list[list[object]]):
-    if Workbook is None:
-        buffer = BytesIO()
-        text_buffer = "\ufeff"
-        csv_rows = [headers, *rows]
-        for row in csv_rows:
-            output = BytesIO()
-            line = ",".join(
-                f'"{str(value).replace(chr(34), chr(34) + chr(34))}"'
-                for value in row
-            )
-            output.write((line + "\n").encode("utf-8"))
-            text_buffer += output.getvalue().decode("utf-8")
-        buffer.write(text_buffer.encode("utf-8"))
-        buffer.seek(0)
-        return StreamingResponse(
-            buffer,
-            media_type="text/csv; charset=utf-8",
-            headers={"Content-Disposition": f'attachment; filename="{filename.replace(".xlsx", ".csv")}"'},
-        )
+def excel_column_name(index: int) -> str:
+    name = ""
+    while index:
+        index, remainder = divmod(index - 1, 26)
+        name = chr(65 + remainder) + name
+    return name
 
-    workbook = Workbook()
-    sheet = workbook.active
-    sheet.title = "Export"
-    sheet.append(headers)
-    for row in rows:
-        sheet.append(row)
+
+def build_minimal_xlsx_buffer(headers: list[str], rows: list[list[object]]) -> BytesIO:
+    def cell_xml(value: object, row_index: int, column_index: int) -> str:
+        cell_ref = f"{excel_column_name(column_index)}{row_index}"
+        if value is None:
+            return f'<c r="{cell_ref}"/>'
+        if isinstance(value, bool):
+            return f'<c r="{cell_ref}" t="b"><v>{1 if value else 0}</v></c>'
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return f'<c r="{cell_ref}"><v>{value}</v></c>'
+        text = escape(str(value), {'"': "&quot;"})
+        return f'<c r="{cell_ref}" t="inlineStr"><is><t>{text}</t></is></c>'
+
+    sheet_rows = []
+    for row_index, row in enumerate([headers, *rows], start=1):
+        cells = "".join(
+            cell_xml(value, row_index, column_index)
+            for column_index, value in enumerate(row, start=1)
+        )
+        sheet_rows.append(f'<row r="{row_index}">{cells}</row>')
+
+    sheet_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        f'<sheetData>{"".join(sheet_rows)}</sheetData>'
+        '</worksheet>'
+    )
 
     buffer = BytesIO()
-    workbook.save(buffer)
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "[Content_Types].xml",
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+            '<Default Extension="xml" ContentType="application/xml"/>'
+            '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+            '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+            '</Types>',
+        )
+        archive.writestr(
+            "_rels/.rels",
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
+            '</Relationships>',
+        )
+        archive.writestr(
+            "xl/workbook.xml",
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+            '<sheets><sheet name="Export" sheetId="1" r:id="rId1"/></sheets>'
+            '</workbook>',
+        )
+        archive.writestr(
+            "xl/_rels/workbook.xml.rels",
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+            '</Relationships>',
+        )
+        archive.writestr("xl/worksheets/sheet1.xml", sheet_xml)
+
+    buffer.seek(0)
+    return buffer
+
+
+def build_excel_response(filename: str, headers: list[str], rows: list[list[object]]):
+    download_name = Path(filename).name
+    if Workbook is None:
+        buffer = build_minimal_xlsx_buffer(headers, rows)
+    else:
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "Export"
+        sheet.append(headers)
+        for row in rows:
+            sheet.append(row)
+
+        buffer = BytesIO()
+        workbook.save(buffer)
     buffer.seek(0)
     return StreamingResponse(
         buffer,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{download_name}"; '
+                f"filename*=UTF-8''{quote(download_name)}"
+            )
+        },
     )
 
 
@@ -2311,7 +2491,7 @@ def admin_payment_verification_excel(
 ):
     orders = (
         db.query(models.Order)
-        .filter(models.Order.utr.is_not(None))
+        .filter(or_(models.Order.utr.is_not(None), models.Order.utr_number.is_not(None)))
         .order_by(models.Order.created_at.desc())
         .all()
     )
@@ -2320,7 +2500,7 @@ def admin_payment_verification_excel(
             order.user_name or (order.user.username if order.user else ""),
             order.phone_number or order.contact_number,
             round(float(order.amount or order.total_amount or 0)),
-            order.utr or "",
+            order.utr_number or order.utr or "",
             order.transaction_id or "",
             order.payment_status or order.status,
         ]
@@ -2510,6 +2690,331 @@ def admin_mark_printed_by_group(
     item_name, mode, print_type = decode_print_group_id(group_id)
     payload = schemas.PrintQueueAction(item_name=item_name, mode=mode, print_type=print_type)
     return admin_print_queue_complete(payload=payload, db=db, current_user=current_user)
+
+
+# -----------------------------------------------
+# BATCH MANAGEMENT ENDPOINTS
+# -----------------------------------------------
+
+def serialize_batch(batch: models.PrintBatch):
+    return {
+        "id": batch.id,
+        "batch_id": batch.batch_id,
+        "status": batch.status,
+        "total_orders": batch.total_orders,
+        "total_revenue": batch.total_revenue,
+        "created_at": batch.created_at.isoformat() if batch.created_at else None,
+        "printing_started_at": batch.printing_started_at.isoformat() if batch.printing_started_at else None,
+        "delivery_ready_at": batch.delivery_ready_at.isoformat() if batch.delivery_ready_at else None,
+    }
+
+
+@app.post("/admin/batches")
+def create_batch(
+    payload: schemas.BatchCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    order_ids = payload.order_ids
+
+    if not order_ids:
+        raise HTTPException(status_code=400, detail="At least one order is required")
+
+    orders = (
+        db.query(models.Order)
+        .filter(models.Order.id.in_(order_ids), models.Order.status == "approved")
+        .all()
+    )
+    if not orders:
+        raise HTTPException(status_code=400, detail="No approved orders found with the given IDs")
+
+    now = datetime.now(timezone.utc)
+    year = now.strftime("%Y")
+    last_batch = (
+        db.query(models.PrintBatch)
+        .filter(models.PrintBatch.batch_id.like(f"BATCH-{year}-%"))
+        .order_by(models.PrintBatch.id.desc())
+        .first()
+    )
+    if last_batch:
+        try:
+            last_seq = int(last_batch.batch_id.rsplit("-", 1)[-1])
+        except (ValueError, IndexError):
+            last_seq = 0
+    else:
+        last_seq = 0
+
+    batch_id_str = f"BATCH-{year}-{last_seq + 1:03d}"
+    total_revenue = sum(o.total_amount or o.amount or 0 for o in orders)
+
+    batch = models.PrintBatch(
+        batch_id=batch_id_str,
+        status="created",
+        total_orders=len(orders),
+        total_revenue=total_revenue,
+        created_at=now,
+    )
+    db.add(batch)
+    db.flush()
+
+    for order in orders:
+        order.batch_ref_id = batch.id
+        order.status = "batched"
+        order.payment_status = "batched"
+
+    db.commit()
+    db.refresh(batch)
+    logger.info("admin created batch admin_id=%s batch_id=%s orders=%s", current_user.id, batch_id_str, len(orders))
+    return serialize_batch(batch)
+
+
+@app.get("/admin/batches")
+def list_batches(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    batches = db.query(models.PrintBatch).order_by(models.PrintBatch.created_at.desc()).all()
+    return [serialize_batch(b) for b in batches]
+
+
+@app.get("/admin/batches/{batch_id}")
+def get_batch_detail(
+    batch_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    batch = db.query(models.PrintBatch).filter(models.PrintBatch.id == batch_id).first()
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    orders = (
+        db.query(models.Order)
+        .options(
+            joinedload(models.Order.items).joinedload(models.OrderItem.book),
+            joinedload(models.Order.items).joinedload(models.OrderItem.upload),
+            joinedload(models.Order.user),
+        )
+        .filter(models.Order.batch_ref_id == batch.id)
+        .order_by(models.Order.created_at.asc())
+        .all()
+    )
+
+    # Consolidated standard books
+    consolidated = {}
+    custom_items = []
+    for order in orders:
+        for item in order.items:
+            if item.item_type == "pdf" or item.stored_filename:
+                custom_items.append({
+                    "order_id": order.id,
+                    "user_name": order.user_name or (order.user.username if order.user else ""),
+                    "item_name": item.item_name or item.original_filename or "Custom",
+                    "total_pages": item.total_pages,
+                    "mode": item.mode,
+                    "print_type": item.print_type,
+                    "quantity": item.quantity,
+                    "stored_filename": item.stored_filename,
+                })
+            else:
+                group_key = f"{item.item_name}|{item.mode or ''}|{item.print_type or ''}"
+                if group_key not in consolidated:
+                    consolidated[group_key] = {
+                        "item_name": item.item_name or "Unnamed",
+                        "mode": item.mode,
+                        "print_type": item.print_type,
+                        "total_quantity": 0,
+                    }
+                consolidated[group_key]["total_quantity"] += item.quantity
+
+    return {
+        **serialize_batch(batch),
+        "orders": [serialize_order(o, include_user=True) for o in orders],
+        "consolidated": list(consolidated.values()),
+        "custom_items": custom_items,
+    }
+
+
+@app.post("/admin/batches/{batch_id}/start-printing")
+def start_batch_printing(
+    batch_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    batch = db.query(models.PrintBatch).filter(models.PrintBatch.id == batch_id).first()
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    now = datetime.now(timezone.utc)
+    batch.status = "printing"
+    batch.printing_started_at = now
+
+    orders = db.query(models.Order).filter(models.Order.batch_ref_id == batch.id).all()
+    for order in orders:
+        order.status = "printing"
+        order.payment_status = "printing"
+        order.printing_started_at = now
+
+    db.commit()
+    logger.info("admin started printing batch admin_id=%s batch_id=%s orders=%s", current_user.id, batch.batch_id, len(orders))
+    return {"message": "Printing started", "batch_id": batch.batch_id}
+
+
+@app.post("/admin/batches/{batch_id}/ready-for-delivery")
+def batch_ready_for_delivery(
+    batch_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    batch = db.query(models.PrintBatch).filter(models.PrintBatch.id == batch_id).first()
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    now = datetime.now(timezone.utc)
+    batch.status = "ready_for_delivery"
+    batch.delivery_ready_at = now
+
+    orders = db.query(models.Order).filter(models.Order.batch_ref_id == batch.id).all()
+    for order in orders:
+        order.status = "ready_for_delivery"
+        order.payment_status = "ready_for_delivery"
+        order.delivery_ready_at = now
+
+    db.commit()
+    logger.info("admin batch ready for delivery admin_id=%s batch_id=%s", current_user.id, batch.batch_id)
+    return {"message": "Batch ready for delivery", "batch_id": batch.batch_id}
+
+
+@app.post("/admin/orders/{order_id}/deliver")
+def mark_order_delivered(
+    order_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    order = db.query(models.Order).filter(models.Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    now = datetime.now(timezone.utc)
+    order.status = "delivered"
+    order.payment_status = "delivered"
+    order.delivered_at = now
+    db.commit()
+    logger.info("admin marked delivered admin_id=%s order_id=%s", current_user.id, order_id)
+    return {"message": "Order marked delivered"}
+
+
+@app.get("/admin/batches/{batch_id}/printing-excel")
+def batch_printing_excel(
+    batch_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    batch = db.query(models.PrintBatch).filter(models.PrintBatch.id == batch_id).first()
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    orders = (
+        db.query(models.Order)
+        .options(joinedload(models.Order.items))
+        .filter(models.Order.batch_ref_id == batch.id)
+        .all()
+    )
+
+    # Consolidated printing instructions
+    groups = {}
+    for order in orders:
+        for item in order.items:
+            if item.item_type == "pdf" or item.stored_filename:
+                continue
+            group_key = f"{item.item_name}|{item.mode or '-'}|{item.print_type or '-'}"
+            if group_key not in groups:
+                groups[group_key] = {
+                    "name": item.item_name or "Unnamed",
+                    "mode": item.mode or "-",
+                    "print_type": item.print_type or "-",
+                    "qty": 0,
+                }
+            groups[group_key]["qty"] += item.quantity
+
+    rows = [
+        [g["name"], g["mode"], g["print_type"], g["qty"]]
+        for g in groups.values()
+    ]
+    return build_excel_response(
+        f"{batch.batch_id}-printing.xlsx",
+        ["Book Name", "Mode", "Print Type", "Total Quantity"],
+        rows,
+    )
+
+
+@app.get("/admin/batches/{batch_id}/delivery-excel")
+def batch_delivery_excel(
+    batch_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    batch = db.query(models.PrintBatch).filter(models.PrintBatch.id == batch_id).first()
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    orders = (
+        db.query(models.Order)
+        .options(joinedload(models.Order.items), joinedload(models.Order.user))
+        .filter(models.Order.batch_ref_id == batch.id)
+        .order_by(models.Order.user_name.asc())
+        .all()
+    )
+
+    rows = []
+    for order in orders:
+        item_details = []
+        book_types = []
+        print_types = []
+        for item in order.items:
+            item_type = item.item_type or ("Custom Upload" if item.stored_filename else "Book")
+            mode = item.mode or "-"
+            print_type = item.print_type or "-"
+            item_details.append(f"{item.item_name or 'Item'} x{item.quantity} ({item_type}, {mode}, {print_type})")
+            book_types.append(item_type)
+            print_types.append(f"{mode} / {print_type}")
+
+        rows.append([
+            order.user_name or (order.user.username if order.user else ""),
+            "; ".join(item_details),
+            "; ".join(dict.fromkeys(book_types)) or "-",
+            "; ".join(dict.fromkeys(print_types)) or "-",
+            order.hostel or order.hostel_name or "-",
+            order.delivery_type or "-",
+            order.contact_number or order.phone_number or "-",
+            order.alternate_contact_number or "-",
+        ])
+
+    return build_excel_response(
+        f"{batch.batch_id}-delivery.xlsx",
+        ["Name", "Items", "Book Type", "Print / Mode", "Hostel", "Delivery Type", "Phone", "Alt Phone"],
+        rows,
+    )
+
+
+@app.get("/admin/delivered-history")
+def admin_delivered_history(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin_user),
+):
+    orders = (
+        db.query(models.Order)
+        .options(
+            joinedload(models.Order.items).joinedload(models.OrderItem.book),
+            joinedload(models.Order.user),
+        )
+        .filter(models.Order.status == "delivered")
+        .order_by(models.Order.delivered_at.desc().nulls_last(), models.Order.created_at.desc())
+        .all()
+    )
+    return [serialize_order(order, include_user=True) for order in orders]
+
+
+
 
 
 

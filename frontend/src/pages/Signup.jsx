@@ -84,7 +84,7 @@ return (
 
   <form
     onSubmit={handleSignup}
-    className="w-full max-w-sm bg-white/5 backdrop-blur-lg border border-white/10 rounded-2xl p-5"
+    className="premium-card w-full max-w-sm bg-white/5 backdrop-blur-lg border border-white/10 rounded-2xl p-5"
   >
 
     <h1 className="text-2xl text-yellow-400 font-bold mb-6 text-center">

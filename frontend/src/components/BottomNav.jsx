@@ -5,6 +5,7 @@ import { useLocation, useNavigate } from "react-router-dom"
 import API from "../api/api"
 import { isLoggedIn } from "../utils/auth"
 import toast from "react-hot-toast"
+import { prefetchRoute } from "../utils/routePrefetch"
 
 function BottomNav() {
   const navigate = useNavigate()
@@ -29,8 +30,12 @@ function BottomNav() {
     fetchCartCount()
 
     window.addEventListener("auth-changed", fetchCartCount)
-    return () => window.removeEventListener("auth-changed", fetchCartCount)
-  }, [location.pathname])
+    window.addEventListener("api-cache-invalidated", fetchCartCount)
+    return () => {
+      window.removeEventListener("auth-changed", fetchCartCount)
+      window.removeEventListener("api-cache-invalidated", fetchCartCount)
+    }
+  }, [])
 
   if (location.pathname.startsWith("/admin")) {
     return null
@@ -58,9 +63,9 @@ function BottomNav() {
   }
 
   const items = [
-    { label: "Home", icon: Home, onClick: () => navigate("/"), active: isActive("/") },
-    { label: "Cart", icon: ShoppingCart, onClick: goToCart, active: isActive("/cart"), badge: cartCount },
-    { label: "Profile", icon: User, onClick: goToProfile, active: isActive("/profile") || isActive("/login") },
+    { label: "Home", icon: Home, onClick: () => navigate("/"), active: isActive("/"), prefetch: "/" },
+    { label: "Cart", icon: ShoppingCart, onClick: goToCart, active: isActive("/cart"), badge: cartCount, prefetch: "/cart" },
+    { label: "Profile", icon: User, onClick: goToProfile, active: isActive("/profile") || isActive("/login"), prefetch: "/profile" },
   ]
 
   return (
@@ -78,6 +83,9 @@ function BottomNav() {
               whileHover={{ y: -2 }}
               whileTap={{ scale: 0.94 }}
               onClick={item.onClick}
+              onMouseEnter={() => prefetchRoute(item.prefetch)}
+              onFocus={() => prefetchRoute(item.prefetch)}
+              onTouchStart={() => prefetchRoute(item.prefetch)}
               className={`relative flex flex-col items-center gap-0.5 rounded-full px-3 py-1 text-[10px] transition ${
                 item.active ? "border border-yellow-400/35 bg-yellow-400/10 text-yellow-400" : "text-gray-400"
               }`}

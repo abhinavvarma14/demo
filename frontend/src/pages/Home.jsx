@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { Upload } from "lucide-react"
 import API from "../api/api"
@@ -7,12 +7,27 @@ import SearchBar from "../components/SearchBar"
 import TopBannerCarousel from "../components/TopBannerCarousel"
 import toast from "react-hot-toast"
 import { getApiErrorMessage } from "../utils/apiError"
+import { prefetchRoute } from "../utils/routePrefetch"
+
+const HOME_FILTER_KEY = "batprint-home-filters"
 
 function Home(){
   const navigate = useNavigate()
   const [books, setBooks] = useState([])
-  const [search, setSearch] = useState("")
-  const [selectedYear, setSelectedYear] = useState("all")
+  const [search, setSearch] = useState(() => {
+    try {
+      return JSON.parse(sessionStorage.getItem(HOME_FILTER_KEY) || "{}").search || ""
+    } catch {
+      return ""
+    }
+  })
+  const [selectedYear, setSelectedYear] = useState(() => {
+    try {
+      return JSON.parse(sessionStorage.getItem(HOME_FILTER_KEY) || "{}").selectedYear || "all"
+    } catch {
+      return "all"
+    }
+  })
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -31,13 +46,23 @@ function Home(){
     fetchBooks()
   }, [])
 
-  const years = ["all", ...new Set(books.map((book) => (book.year || "").toLowerCase()).filter(Boolean))]
+  useEffect(() => {
+    sessionStorage.setItem(HOME_FILTER_KEY, JSON.stringify({ search, selectedYear }))
+  }, [search, selectedYear])
 
-  const filteredBooks = books.filter((book) => {
-    const matchesSearch = book.name.toLowerCase().includes(search.trim().toLowerCase())
-    const matchesYear = selectedYear === "all" || (book.year || "").toLowerCase() === selectedYear
-    return matchesSearch && matchesYear
-  })
+  const years = useMemo(
+    () => ["all", ...new Set(books.map((book) => (book.year || "").toLowerCase()).filter(y => Boolean(y) && y !== "all"))],
+    [books]
+  )
+
+  const filteredBooks = useMemo(() => {
+    const searchTerm = search.trim().toLowerCase()
+    return books.filter((book) => {
+      const matchesSearch = book.name.toLowerCase().includes(searchTerm)
+      const matchesYear = selectedYear === "all" || (book.year || "").toLowerCase() === selectedYear
+      return matchesSearch && matchesYear
+    })
+  }, [books, search, selectedYear])
 
   return(
 
@@ -70,7 +95,7 @@ function Home(){
 
       {/* Books Grid */}
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="stagger-list grid grid-cols-2 gap-3">
         {loading && (
           <>
             {[1, 2, 3, 4].map((item) => (
@@ -95,7 +120,10 @@ function Home(){
 
       <div
         onClick={()=>navigate("/upload")}
-        className="mt-6 bg-white/5 backdrop-blur-xl border border-white/10 
+        onMouseEnter={() => prefetchRoute("/upload")}
+        onFocus={() => prefetchRoute("/upload")}
+        onTouchStart={() => prefetchRoute("/upload")}
+        className="premium-card premium-interactive mt-6 bg-white/5 backdrop-blur-xl border border-white/10 
         rounded-2xl p-6 flex flex-col items-center justify-center
         hover:border-yellow-400 transition cursor-pointer shadow-lg"
       >

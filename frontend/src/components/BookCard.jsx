@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useState } from "react"
-import { motion } from "framer-motion"
+import { motion, AnimatePresence } from "framer-motion"
 import { createPortal } from "react-dom"
 import { useNavigate } from "react-router-dom"
 import API from "../api/api"
@@ -22,7 +22,7 @@ function BookCard({ book }) {
   const [leaveFromDate, setLeaveFromDate] = useState("")
   const [leaveToDate, setLeaveToDate] = useState("")
   const [requestReason, setRequestReason] = useState("")
-  const options = Array.isArray(book?.options) ? book.options : []
+  const options = useMemo(() => (Array.isArray(book?.options) ? book.options : []), [book?.options])
   const printTypeOptions = useMemo(
     () => [...new Set(options.map((option) => option.print_type || "").filter((value) => value !== undefined))],
     [options]
@@ -141,7 +141,7 @@ function BookCard({ book }) {
     <motion.article
       whileHover={{ y: -4 }}
       transition={{ type: "spring", stiffness: 260, damping: 22 }}
-      className="group relative overflow-hidden rounded-2xl bg-[#111111] p-3 shadow-[0_18px_34px_rgba(0,0,0,0.24)]"
+      className="premium-card group relative overflow-hidden rounded-2xl bg-[#111111] p-3 shadow-[0_18px_34px_rgba(0,0,0,0.24)]"
     >
       <div className="absolute inset-0 bg-[linear-gradient(180deg,_rgba(255,255,255,0.04),_transparent_24%),radial-gradient(circle_at_bottom_right,_rgba(255,255,255,0.05),_transparent_28%)] opacity-70" />
       {isSimpleBook && (
@@ -249,10 +249,23 @@ function BookCard({ book }) {
           />
         </div>
       </div>
-      {showDetailsModal &&
-        createPortal(
-          <div className="fixed inset-0 z-[100] flex items-end justify-center bg-black/70 p-3 backdrop-blur-sm sm:items-center">
-            <div className="w-full max-w-md rounded-2xl bg-[#111111] p-4 shadow-[0_18px_34px_rgba(0,0,0,0.3)]">
+      {createPortal(
+        <AnimatePresence>
+          {showDetailsModal && (
+            <motion.div
+              className="fixed inset-0 z-[100] flex items-end justify-center bg-black/70 p-3 backdrop-blur-sm sm:items-center"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+            >
+              <motion.div
+                className="premium-card w-full max-w-md rounded-2xl bg-[#111111] p-4 shadow-[0_18px_34px_rgba(0,0,0,0.3)]"
+                initial={{ opacity: 0, scale: 0.96, y: 8 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.96, y: 8 }}
+                transition={{ duration: 0.2, ease: "easeOut" }}
+              >
               <p className="text-sm font-semibold text-white">
                 Enter your leave dates and reason
               </p>
@@ -308,10 +321,12 @@ function BookCard({ book }) {
                   {submitting ? "Adding..." : "Add"}
                 </button>
               </div>
-            </div>
-          </div>,
-          document.body
-        )}
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>,
+        document.body
+      )}
     </motion.article>
   )
 }

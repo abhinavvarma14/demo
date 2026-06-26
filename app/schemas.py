@@ -162,7 +162,7 @@ class CartItemCreate(BaseModel):
 
 
 class OrderCreate(BaseModel):
-    user_name: str = Field(min_length=2, max_length=120)
+    user_name: Optional[str] = Field(default=None, min_length=2, max_length=120)
     delivery_type: Literal["hostel", "dayscholar"]
     hostel_name: Optional[str] = None
     contact_number: str = Field(min_length=10, max_length=10)
@@ -170,7 +170,9 @@ class OrderCreate(BaseModel):
 
     @field_validator("user_name")
     @classmethod
-    def validate_user_name(cls, value: str):
+    def validate_user_name(cls, value: Optional[str]):
+        if value is None:
+            return value
         normalized = value.strip()
         if not normalized:
             raise ValueError("Name is required")
@@ -322,12 +324,22 @@ class ApiOrderCreate(BaseModel):
 
 class ApiOrderVerify(BaseModel):
     order_id: int
-    utr: str = Field(min_length=4, max_length=120)
+    utr_number: str = Field(min_length=4, max_length=120)
+    transaction_id: str = Field(min_length=4, max_length=120)
 
-    @field_validator("utr")
+    @field_validator("utr_number", "transaction_id")
     @classmethod
-    def validate_utr(cls, value: str):
+    def validate_code(cls, value: str):
         normalized = value.strip()
         if not normalized:
-            raise ValueError("UTR is required")
+            raise ValueError("Field is required")
         return normalized
+
+
+class BatchCreate(BaseModel):
+    order_ids: list[int]
+
+
+class SupportMessageCreate(BaseModel):
+    message: str = Field(min_length=1)
+

@@ -1,4 +1,5 @@
 import { useLocation, useNavigate } from "react-router-dom"
+import { prefetchRoute } from "../utils/routePrefetch"
 
 function Navbar(){
 
@@ -13,13 +14,16 @@ function Navbar(){
 
     <div className="fixed top-3 left-1/2 z-50 flex -translate-x-1/2 justify-center px-4">
 
-      <div className="w-full max-w-[460px] relative
+      <div className="premium-card w-full max-w-[460px] relative
       bg-white/5 backdrop-blur-xl border border-white/10
       rounded-full px-5 py-3 flex items-center justify-center shadow-lg">
 
         <div
           onClick={()=>navigate("/")}
-          className="
+          onMouseEnter={() => prefetchRoute("/")}
+          onFocus={() => prefetchRoute("/")}
+          onTouchStart={() => prefetchRoute("/")}
+          className="premium-interactive
           flex items-center gap-2 cursor-pointer"
         >
           <span className="text-yellow-400 text-lg">🦇</span>

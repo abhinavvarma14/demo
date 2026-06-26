@@ -2,15 +2,30 @@ import axios from "axios"
 import { clearAuth, getToken, isLoggedIn } from "../utils/auth"
 
 const DEFAULT_API_BASE_URL = "https://demo-production-f9fb.up.railway.app"
+const LOCAL_API_BASE_URL = "http://127.0.0.1:8000"
+const RAILWAY_API_PATTERN = /demo-production-f9fb\.up\.railway\.app/i
+
+const isLocalFrontend = () =>
+  typeof window !== "undefined" &&
+  ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname)
 
 const normalizeBaseUrl = (value) => {
   const trimmed = String(value || "").trim()
-  if (!trimmed) return DEFAULT_API_BASE_URL
+  const runningLocally = isLocalFrontend()
+
+  if (!trimmed) {
+    return runningLocally ? LOCAL_API_BASE_URL : DEFAULT_API_BASE_URL
+  }
+
   const normalized = trimmed.startsWith("http://") || trimmed.startsWith("https://")
     ? trimmed.replace(/\/+$/, "")
     : `https://${trimmed.replace(/\/+$/, "")}`
 
-  if (/demo-production-f9fb\.up\.railway\.app/i.test(normalized)) {
+  if (runningLocally && RAILWAY_API_PATTERN.test(normalized)) {
+    return LOCAL_API_BASE_URL
+  }
+
+  if (RAILWAY_API_PATTERN.test(normalized) || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(normalized)) {
     return normalized
   }
 
@@ -26,6 +41,92 @@ if (import.meta.env.DEV) {
 const API = axios.create({
   baseURL: API_BASE_URL
 })
+
+const GET_CACHE_TTL = 30_000
+const ADMIN_CACHE_TTL = 8_000
+const STALE_CACHE_TTL = 5 * 60_000
+const getCache = new Map()
+const inflightGets = new Map()
+
+const stableSerialize = (value) => {
+  if (!value || typeof value !== "object") return String(value || "")
+  return JSON.stringify(
+    Object.keys(value)
+      .sort()
+      .reduce((acc, key) => {
+        acc[key] = value[key]
+        return acc
+      }, {})
+  )
+}
+
+const getCacheKey = (url, config = {}) =>
+  `${getRequestPath(url)}?${stableSerialize(config.params)}`
+
+const getCacheTtl = (url) => (getRequestPath(url).startsWith("/admin") ? ADMIN_CACHE_TTL : GET_CACHE_TTL)
+
+const shouldCacheGet = (url, config = {}) => {
+  if (config.responseType || config.cache === false) return false
+  const path = getRequestPath(url)
+  return !path.includes("/uploads/")
+}
+
+export const clearApiCache = (matcher) => {
+  if (!matcher) {
+    getCache.clear()
+    return
+  }
+
+  for (const key of getCache.keys()) {
+    if (typeof matcher === "string" ? key.startsWith(matcher) : matcher(key)) {
+      getCache.delete(key)
+    }
+  }
+}
+
+const originalGet = API.get.bind(API)
+API.get = (url, config = {}) => {
+  if (!shouldCacheGet(url, config)) return originalGet(url, config)
+
+  const key = getCacheKey(url, config)
+  const cached = getCache.get(key)
+  if (cached && Date.now() - cached.timestamp < getCacheTtl(url)) {
+    return Promise.resolve(cached.response)
+  }
+
+  if (inflightGets.has(key)) {
+    return inflightGets.get(key)
+  }
+
+  const request = originalGet(url, config)
+    .then((response) => {
+      getCache.set(key, { response, timestamp: Date.now() })
+      return response
+    })
+    .catch((error) => {
+      const stale = getCache.get(key)
+      if (stale && Date.now() - stale.timestamp < STALE_CACHE_TTL) {
+        return stale.response
+      }
+      throw error
+    })
+    .finally(() => inflightGets.delete(key))
+
+  inflightGets.set(key, request)
+  return request
+}
+
+const invalidateAfterMutation = (method) => async (...args) => {
+  const response = await method(...args)
+  clearApiCache()
+  window.dispatchEvent(new Event("api-cache-invalidated"))
+  return response
+}
+
+API.post = invalidateAfterMutation(API.post.bind(API))
+API.put = invalidateAfterMutation(API.put.bind(API))
+API.patch = invalidateAfterMutation(API.patch.bind(API))
+API.delete = invalidateAfterMutation(API.delete.bind(API))
 
 const protectedPrefixes = [
   "/admin",
@@ -113,3 +214,5 @@ API.interceptors.response.use(
 )
 
 export default API
+
+

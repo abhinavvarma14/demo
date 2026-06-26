@@ -97,6 +97,13 @@ def auth_headers(token):
     return {"Authorization": f"Bearer {token}"}
 
 
+def test_health_check_is_plain_ok(client):
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.text == "OK"
+
+
 def test_signup_rejects_duplicate_username(client):
     first = signup(client)
     second = signup(client)
@@ -405,7 +412,7 @@ def test_order_and_print_queue_flow(client, app_module):
     assert books_response.status_code == 200
     first_book = books_response.json()[0]
     first_option = first_book["options"][0]
-
+ 
     add_cart_response = client.post(
         "/cart/items",
         json={
@@ -470,6 +477,85 @@ def test_order_and_print_queue_flow(client, app_module):
     empty_queue_response = client.get("/admin/print-queue", headers=auth_headers(admin_token))
     assert empty_queue_response.status_code == 200
     assert empty_queue_response.json() == []
+
+
+def test_admin_can_create_print_batch_and_export_excel(client, app_module):
+    signup(client, username="batchbuyer")
+    buyer_token = login(client, username="batchbuyer").json()["access_token"]
+
+    books_response = client.get("/books", headers=auth_headers(buyer_token))
+    first_book = books_response.json()[0]
+    first_option = first_book["options"][0]
+
+    add_cart_response = client.post(
+        "/cart/items",
+        json={
+            "item_type": "book",
+            "book_id": first_book["id"],
+            "mode": first_option["mode"],
+            "print_type": first_option["print_type"],
+            "quantity": 2,
+        },
+        headers=auth_headers(buyer_token),
+    )
+    assert add_cart_response.status_code == 200
+
+    order_response = client.post(
+        "/orders",
+        json={
+            "delivery_type": "hostel",
+            "hostel_name": "Himalaya",
+            "contact_number": "9876543210",
+            "alternate_contact_number": "",
+        },
+        headers=auth_headers(buyer_token),
+    )
+    assert order_response.status_code == 200
+    order_id = order_response.json()["order_id"]
+
+    create_admin(app_module)
+    admin_token = login(client, username="adminuser").json()["access_token"]
+    approve_response = client.put(
+        f"/admin/orders/{order_id}/status?status=approved",
+        headers=auth_headers(admin_token),
+    )
+    assert approve_response.status_code == 200
+
+    batch_response = client.post(
+        "/admin/batches",
+        json={"order_ids": [order_id]},
+        headers=auth_headers(admin_token),
+    )
+    assert batch_response.status_code == 200
+    batch_payload = batch_response.json()
+    assert batch_payload["id"]
+    assert batch_payload["status"] == "created"
+    assert batch_payload["total_orders"] == 1
+
+    batches_response = client.get("/admin/batches", headers=auth_headers(admin_token))
+    assert batches_response.status_code == 200
+    assert len(batches_response.json()) == 1
+
+    excel_response = client.get(
+        f"/admin/batches/{batch_payload['id']}/printing-excel",
+        headers=auth_headers(admin_token),
+    )
+    assert excel_response.status_code == 200
+    assert excel_response.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    assert excel_response.content.startswith(b"PK")
+
+    start_response = client.post(
+        f"/admin/batches/{batch_payload['id']}/start-printing",
+        headers=auth_headers(admin_token),
+    )
+    assert start_response.status_code == 200
+
+    refreshed_orders = client.get("/admin/orders", headers=auth_headers(admin_token)).json()
+    refreshed_order = next(order for order in refreshed_orders if order["id"] == order_id)
+    assert refreshed_order["status"] == "printing"
+    assert refreshed_order["batch_ref_id"] == batch_payload["id"]
 
 
 def test_pdf_upload_cart_and_admin_download_flow(client, app_module):
