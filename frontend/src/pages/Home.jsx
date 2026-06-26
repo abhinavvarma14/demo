@@ -29,14 +29,17 @@ function Home(){
     }
   })
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
 
   useEffect(() => {
     const fetchBooks = async () => {
       try {
+        setLoadError(false)
         const res = await API.get("/books")
         setBooks(res.data)
       } catch (error) {
         console.log(error)
+        setLoadError(true)
         toast.error(getApiErrorMessage(error))
       } finally {
         setLoading(false)
@@ -104,7 +107,13 @@ function Home(){
           </>
         )}
 
-        {!loading && filteredBooks.length === 0 && (
+        {!loading && loadError && (
+          <div className="col-span-2 text-gray-400">
+            Please refresh the page.
+          </div>
+        )}
+
+        {!loading && !loadError && filteredBooks.length === 0 && (
           <div className="col-span-2 text-gray-400">
             No books available right now.
           </div>
@@ -147,3 +156,4 @@ function Home(){
 }
 
 export default Home
+

@@ -3,7 +3,17 @@ import { API_BASE_URL } from "../api/api"
 
 const SHOW_LOADER_AFTER_MS = 220
 const HEALTH_RETRY_MS = 1200
+const STARTUP_DEBUG_KEY = "debugStartup"
+const readinessPaths = ["/health", "/"]
 const nodes = Array.from({ length: 10 }, (_, index) => index)
+
+const shouldDebugStartup = () =>
+  typeof window !== "undefined" &&
+  (window.location.search.includes(STARTUP_DEBUG_KEY) || localStorage.getItem(STARTUP_DEBUG_KEY) === "1")
+
+const logStartup = (...args) => {
+  if (shouldDebugStartup()) console.info("[startup]", ...args)
+}
 
 function StartupLoader() {
   const [visible, setVisible] = useState(false)
@@ -13,8 +23,13 @@ function StartupLoader() {
     let retryTimeout
     let activeController
 
+    logStartup("mounted", { apiBaseUrl: API_BASE_URL })
+
     const revealTimeout = window.setTimeout(() => {
-      if (!cancelled) setVisible(true)
+      if (!cancelled) {
+        logStartup("showing intro because backend is still waking")
+        setVisible(true)
+      }
     }, SHOW_LOADER_AFTER_MS)
 
     const checkBackend = async () => {
@@ -23,18 +38,33 @@ function StartupLoader() {
       activeController = new AbortController()
 
       try {
-        const response = await fetch(`${API_BASE_URL}/health`, {
-          cache: "no-store",
-          signal: activeController.signal,
-        })
+        let ready = false
+        let lastStatus = "not-started"
 
-        if (!response.ok) throw new Error("Backend health check failed")
+        for (const path of readinessPaths) {
+          const response = await fetch(`${API_BASE_URL}${path}`, {
+            cache: "no-store",
+            signal: activeController.signal,
+          })
+
+          lastStatus = `${path} -> ${response.status}`
+          logStartup("readiness probe", lastStatus)
+
+          if (response.ok) {
+            ready = true
+            break
+          }
+        }
+
+        if (!ready) throw new Error(`Backend readiness failed: ${lastStatus}`)
         if (cancelled) return
 
         window.clearTimeout(revealTimeout)
+        logStartup("backend ready, hiding intro")
         setVisible(false)
       } catch (error) {
         if (cancelled || error.name === "AbortError") return
+        logStartup("backend not ready, retrying", error.message)
         retryTimeout = window.setTimeout(checkBackend, HEALTH_RETRY_MS)
       }
     }
@@ -46,6 +76,7 @@ function StartupLoader() {
       window.clearTimeout(revealTimeout)
       window.clearTimeout(retryTimeout)
       activeController?.abort()
+      logStartup("unmounted")
     }
   }, [])
 
@@ -89,3 +120,4 @@ function StartupLoader() {
 }
 
 export default StartupLoader
+

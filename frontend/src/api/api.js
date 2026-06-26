@@ -3,7 +3,6 @@ import { clearAuth, getToken, isLoggedIn } from "../utils/auth"
 
 const DEFAULT_API_BASE_URL = "https://demo-production-f9fb.up.railway.app"
 const LOCAL_API_BASE_URL = "http://127.0.0.1:8000"
-const RAILWAY_API_PATTERN = /demo-production-f9fb\.up\.railway\.app/i
 
 const isLocalFrontend = () =>
   typeof window !== "undefined" &&
@@ -17,19 +16,9 @@ const normalizeBaseUrl = (value) => {
     return runningLocally ? LOCAL_API_BASE_URL : DEFAULT_API_BASE_URL
   }
 
-  const normalized = trimmed.startsWith("http://") || trimmed.startsWith("https://")
+  return trimmed.startsWith("http://") || trimmed.startsWith("https://")
     ? trimmed.replace(/\/+$/, "")
     : `https://${trimmed.replace(/\/+$/, "")}`
-
-  if (runningLocally && RAILWAY_API_PATTERN.test(normalized)) {
-    return LOCAL_API_BASE_URL
-  }
-
-  if (RAILWAY_API_PATTERN.test(normalized) || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(normalized)) {
-    return normalized
-  }
-
-  return DEFAULT_API_BASE_URL
 }
 
 export const API_BASE_URL = normalizeBaseUrl(import.meta.env.VITE_API_URL)
@@ -214,5 +203,4 @@ API.interceptors.response.use(
 )
 
 export default API
-
 
