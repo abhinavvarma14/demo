@@ -206,7 +206,7 @@ function Admin({ defaultSection = "verification" }) {
 
   const handleCreateBatch = async () => {
     if (batchApiUnavailable) {
-      toast.error("Print batch API is not available on this backend. Run the updated local backend or redeploy Railway.")
+      toast.error("Print batch API is not available on this backend. Redeploy Railway with the latest backend and refresh this page.")
       return
     }
 
@@ -244,7 +244,7 @@ function Admin({ defaultSection = "verification" }) {
     } catch (err) {
       if ([404, 405].includes(err.response?.status)) {
         setBatchApiUnavailable(true)
-        toast.error("Print batch API is not available on this backend. Run the updated local backend or redeploy Railway.")
+        toast.error("Print batch API is not available on this backend. Redeploy Railway with the latest backend and refresh this page.")
       } else {
         toast.error(getApiErrorMessage(err))
       }
@@ -516,7 +516,7 @@ function Admin({ defaultSection = "verification" }) {
                   </div>
                   {batchApiUnavailable && (
                     <div className="mb-6 rounded-2xl border border-yellow-400/20 bg-yellow-400/10 px-4 py-3 text-sm font-medium text-yellow-100">
-                      Print batches are not available from the current backend. For local testing, start the updated FastAPI server on 127.0.0.1:8000; for live Vercel, redeploy Railway with the latest backend.
+                      Print batches are not available from the current backend. Redeploy Railway with the latest backend and refresh this page.
                     </div>
                   )}
                   <div className="grid gap-4">

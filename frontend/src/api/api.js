@@ -1,40 +1,7 @@
 import axios from "axios"
 import { clearAuth, getToken, isLoggedIn } from "../utils/auth"
 
-const DEFAULT_API_BASE_URL = "https://demo-production-902a.up.railway.app"
-const LOCAL_API_BASE_URL = "http://127.0.0.1:8000"
-
-const isLocalFrontend = () =>
-  typeof window !== "undefined" &&
-  ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname)
-
-const normalizeBaseUrl = (value) => {
-  const trimmed = String(value || "").trim()
-  const runningLocally = isLocalFrontend()
-
-  if (!trimmed) {
-    return runningLocally ? LOCAL_API_BASE_URL : DEFAULT_API_BASE_URL
-  }
-
-  const normalized = trimmed.startsWith("http://") || trimmed.startsWith("https://")
-    ? trimmed.replace(/\/+$/, "")
-    : `https://${trimmed.replace(/\/+$/, "")}`
-
-  // Protect production builds from stale Vercel env vars pointing at removed Railway apps.
-  try {
-    const configuredHost = new URL(normalized).hostname
-    const defaultHost = new URL(DEFAULT_API_BASE_URL).hostname
-    if (configuredHost.endsWith(".up.railway.app") && configuredHost !== defaultHost) {
-      return DEFAULT_API_BASE_URL
-    }
-  } catch {
-    return runningLocally ? LOCAL_API_BASE_URL : DEFAULT_API_BASE_URL
-  }
-
-  return normalized
-}
-
-export const API_BASE_URL = normalizeBaseUrl(import.meta.env.VITE_API_URL)
+export const API_BASE_URL = "https://demo-production-902a.up.railway.app"
 
 if (import.meta.env.DEV) {
   console.info("[batprint] API base URL:", API_BASE_URL)
