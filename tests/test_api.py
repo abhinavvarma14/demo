@@ -97,11 +97,11 @@ def auth_headers(token):
     return {"Authorization": f"Bearer {token}"}
 
 
-def test_health_check_is_plain_ok(client):
+def test_health_check_returns_json_ok(client):
     response = client.get("/health")
 
     assert response.status_code == 200
-    assert response.text == "OK"
+    assert response.json() == {"status": "ok"}
 
 
 def test_signup_rejects_duplicate_username(client):
@@ -656,3 +656,4 @@ def test_legacy_plaintext_password_is_upgraded_on_login(client, app_module):
         assert app_module.is_password_hashed(refreshed_user.password_hash)
     finally:
         db.close()
+

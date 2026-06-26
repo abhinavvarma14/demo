@@ -144,7 +144,6 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Batman Printing Backend", lifespan=lifespan)
-app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 
 app.add_middleware(
     CORSMiddleware,
@@ -206,6 +205,8 @@ def preflight_handler(full_path: str, request: Request):
         headers=cors_response_headers(request),
     )
 
+
+app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -953,9 +954,10 @@ def root():
     return {"message": "Batman backend running"}
 
 
-@app.get("/health", include_in_schema=False)
+@app.get("/health")
+@app.get("/health/", include_in_schema=False)
 def health_check():
-    return Response(content="OK", media_type="text/plain")
+    return {"status": "ok"}
 
 @app.post("/signup")
 def signup(user: schemas.UserCreate, db: Session = Depends(get_db)):
@@ -3012,6 +3014,11 @@ def admin_delivered_history(
         .all()
     )
     return [serialize_order(order, include_user=True) for order in orders]
+
+
+
+
+
 
 
 
