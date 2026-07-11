@@ -144,6 +144,8 @@ class Order(Base):
     utr = Column(String, nullable=True)
     utr_number = Column(String, nullable=True, index=True)
     transaction_id = Column(String, nullable=True, index=True)
+    idempotency_key = Column(String, nullable=True, unique=True, index=True)
+    payment_verification_key = Column(String, nullable=True, unique=True, index=True)
     fraud_flag = Column(Boolean, default=False)
     verification_notes = Column(String, nullable=True)
     status = Column(String, default="pending", index=True)
@@ -235,3 +237,4 @@ class Banner(Base):
     clickable = Column(Boolean, default=False)
     active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+

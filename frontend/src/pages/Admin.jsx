@@ -11,6 +11,7 @@ import API, { API_BASE_URL } from "../api/api"
 import toast from "react-hot-toast"
 import { isLoggedIn } from "../utils/auth"
 import { getApiErrorMessage } from "../utils/apiError"
+import DeliveryQueue from "../components/DeliveryQueue"
 
 const ADMIN_TABS = [
   { id: "verification", label: "Verification", icon: ShieldCheck },
@@ -192,12 +193,26 @@ function Admin({ defaultSection = "verification" }) {
 
   // Actions
   const updateOrderStatus = async (id, status) => {
+    if (actionLoading) return
+
+    const actionKey = `order-${id}-${status}`
+    const previousOrders = orders
+    setActionLoading(actionKey)
+    setOrders((current) => current.map((order) => (
+      order.id === id
+        ? {
+            ...order,
+            status,
+            delivered_at: status === "delivered" ? new Date().toISOString() : order.delivered_at,
+          }
+        : order
+    )))
+
     try {
-      setActionLoading(`order-${id}-${status}`)
       await API.put(`/admin/orders/${id}/status?status=${status}`)
       toast.success(`Order ${status}`)
-      fetchData()
     } catch (err) {
+      setOrders(previousOrders)
       toast.error(getApiErrorMessage(err))
     } finally {
       setActionLoading("")
@@ -637,60 +652,13 @@ function Admin({ defaultSection = "verification" }) {
               )}
 
               {activeTab === "delivery" && (
-                <div className="grid gap-4">
-                  {readyForDelivery.length === 0 ? (
-                    <div className="p-20 text-center text-white/20 border-2 border-dashed border-white/5 rounded-3xl">
-                      No orders ready for delivery
-                    </div>
-                  ) : (
-                    readyForDelivery.map(order => (
-                      <div key={order.id} className="premium-card bg-white/5 border border-white/10 rounded-2xl p-5 hover:border-white/20 transition">
-                        <div className="flex flex-col md:flex-row justify-between gap-6">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-3 mb-4">
-                              <span className="text-xs font-bold px-2 py-1 bg-green-400/10 text-green-400 rounded">READY FOR DELIVERY</span>
-                              <span className="text-xs font-bold text-white/40">{order.batch_id || "Unbatched"}</span>
-                            </div>
-                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                              <div>
-                                <p className="text-[10px] text-white/30 uppercase mb-1">Customer</p>
-                                <p className="font-bold text-white">{order.user_name}</p>
-                              </div>
-                              <div>
-                                <p className="text-[10px] text-white/30 uppercase mb-1">Location</p>
-                                <p className="text-sm text-white/70">{order.hostel || order.hostel_name} | {order.delivery_type}</p>
-                              </div>
-                              <div>
-                                <p className="text-[10px] text-white/30 uppercase mb-1">Contact</p>
-                                <p className="text-sm text-white/70">{order.contact_number}</p>
-                              </div>
-                              <div>
-                                <p className="text-[10px] text-white/30 uppercase mb-1">Items</p>
-                                <div className="text-xs text-white/50 max-h-12 overflow-y-auto thin-scrollbar">
-                                  {order.items?.map((it, i) => (
-                                    <div key={i}>{it.item_name} x{it.quantity} | {it.item_type || "Book"} | {it.mode || "-"} / {it.print_type || "-"}</div>
-                                  ))}
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                          <div className="flex items-center">
-                            <button 
-                              onClick={() => updateOrderStatus(order.id, "delivered")}
-                              disabled={actionLoading === `order-${order.id}-delivered`}
-                              className="w-full md:w-auto px-8 py-3 bg-green-500 text-black font-bold rounded-xl hover:bg-green-400 transition flex items-center justify-center gap-2"
-                            >
-                              <Truck className="w-4 h-4" />
-                              Mark Delivered
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
+                <DeliveryQueue
+                  orders={readyForDelivery}
+                  actionLoading={actionLoading}
+                  getLoadingKey={(order) => `order-${order.id}-delivered`}
+                  onMarkDelivered={(order) => updateOrderStatus(order.id, "delivered")}
+                />
               )}
-
               {activeTab === "history" && (
                 <div className="grid gap-3">
                   {deliveredHistory.map(order => (

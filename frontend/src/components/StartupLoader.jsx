@@ -1,121 +1,211 @@
-import { useEffect, useState } from "react"
+import { AnimatePresence, motion } from "framer-motion"
+import { useEffect, useRef, useState } from "react"
 import { API_BASE_URL } from "../api/api"
 
-const SHOW_LOADER_AFTER_MS = 220
-const HEALTH_RETRY_MS = 1200
-const STARTUP_DEBUG_KEY = "debugStartup"
+const SHOW_LOADER_AFTER_MS = 320
+const REQUEST_TIMEOUT_MS = 1200
+const HEALTH_RETRY_MS = 1500
 const readinessPaths = ["/health", "/"]
-const nodes = Array.from({ length: 10 }, (_, index) => index)
 
-const shouldDebugStartup = () =>
-  typeof window !== "undefined" &&
-  (window.location.search.includes(STARTUP_DEBUG_KEY) || localStorage.getItem(STARTUP_DEBUG_KEY) === "1")
+function IntroParticles() {
+  const canvasRef = useRef(null)
 
-const logStartup = (...args) => {
-  if (shouldDebugStartup()) console.info("[startup]", ...args)
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return undefined
+
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return undefined
+
+    let frameId = 0
+    let width = window.innerWidth
+    let height = window.innerHeight
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.5)
+    const particleCount = window.matchMedia("(max-width: 768px)").matches ? 72 : 120
+
+    const setSize = () => {
+      width = window.innerWidth
+      height = window.innerHeight
+      canvas.width = Math.floor(width * dpr)
+      canvas.height = Math.floor(height * dpr)
+      canvas.style.width = `${width}px`
+      canvas.style.height = `${height}px`
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    }
+
+    const resetParticle = (particle = {}) => {
+      particle.x = Math.random() * width
+      particle.y = Math.random() * height
+      particle.radius = Math.random() * 2 + 0.8
+      particle.speed = Math.random() * 0.35 + 0.15
+      particle.alpha = Math.random() * 0.6 + 0.2
+      particle.color = Math.random() > 0.35 ? "#FFD54A" : "#ffffff"
+      return particle
+    }
+
+    const updateParticle = (particle) => {
+      particle.y -= particle.speed
+      if (particle.y < 0) {
+        particle.y = height + 10
+        particle.x = Math.random() * width
+      }
+    }
+
+    const drawParticle = (particle) => {
+      ctx.beginPath()
+      ctx.globalAlpha = particle.alpha
+      ctx.fillStyle = particle.color
+      ctx.arc(particle.x, particle.y, particle.radius, 0, Math.PI * 2)
+      ctx.fill()
+    }
+
+    setSize()
+    const particles = Array.from({ length: particleCount }, () => resetParticle())
+
+    const animate = () => {
+      ctx.clearRect(0, 0, width, height)
+      for (const particle of particles) {
+        updateParticle(particle)
+        drawParticle(particle)
+      }
+      frameId = window.requestAnimationFrame(animate)
+    }
+
+    const handleResize = () => {
+      setSize()
+      for (const particle of particles) resetParticle(particle)
+    }
+    window.addEventListener("resize", handleResize, { passive: true })
+    frameId = window.requestAnimationFrame(animate)
+
+    return () => {
+      window.cancelAnimationFrame(frameId)
+      window.removeEventListener("resize", handleResize)
+    }
+  }, [])
+
+  return <canvas ref={canvasRef} className="particleCanvas" aria-hidden="true" />
 }
 
 function StartupLoader() {
   const [visible, setVisible] = useState(false)
+  const cancelledRef = useRef(false)
+  const retryRef = useRef(null)
+  const revealRef = useRef(null)
+  const controllerRef = useRef(null)
 
   useEffect(() => {
-    let cancelled = false
-    let retryTimeout
-    let activeController
+    cancelledRef.current = false
 
-    logStartup("mounted", { apiBaseUrl: API_BASE_URL })
+    const clearTimers = () => {
+      window.clearTimeout(retryRef.current)
+      window.clearTimeout(revealRef.current)
+    }
 
-    const revealTimeout = window.setTimeout(() => {
-      if (!cancelled) {
-        logStartup("showing intro because backend is still waking")
-        setVisible(true)
-      }
-    }, SHOW_LOADER_AFTER_MS)
-
-    const checkBackend = async () => {
-      if (cancelled) return
-
-      activeController = new AbortController()
+    const probe = async (path) => {
+      controllerRef.current?.abort()
+      const controller = new AbortController()
+      controllerRef.current = controller
+      const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
 
       try {
-        let ready = false
-        let lastStatus = "not-started"
-
-        for (const path of readinessPaths) {
-          const response = await fetch(`${API_BASE_URL}${path}`, {
-            cache: "no-store",
-            signal: activeController.signal,
-          })
-
-          lastStatus = `${path} -> ${response.status}`
-          logStartup("readiness probe", lastStatus)
-
-          if (response.ok) {
-            ready = true
-            break
-          }
-        }
-
-        if (!ready) throw new Error(`Backend readiness failed: ${lastStatus}`)
-        if (cancelled) return
-
-        window.clearTimeout(revealTimeout)
-        logStartup("backend ready, hiding intro")
-        setVisible(false)
-      } catch (error) {
-        if (cancelled || error.name === "AbortError") return
-        logStartup("backend not ready, retrying", error.message)
-        retryTimeout = window.setTimeout(checkBackend, HEALTH_RETRY_MS)
+        const response = await fetch(`${API_BASE_URL}${path}`, {
+          cache: "no-store",
+          signal: controller.signal,
+        })
+        return response.status < 500
+      } finally {
+        window.clearTimeout(timeout)
       }
     }
 
+    const checkBackend = async () => {
+      if (cancelledRef.current || document.hidden) return
+
+      try {
+        for (const path of readinessPaths) {
+          if (await probe(path)) {
+            clearTimers()
+            if (!cancelledRef.current) setVisible(false)
+            return
+          }
+        }
+      } catch {
+        if (cancelledRef.current) return
+      }
+
+      if (!cancelledRef.current) {
+        retryRef.current = window.setTimeout(checkBackend, HEALTH_RETRY_MS)
+      }
+    }
+
+    revealRef.current = window.setTimeout(() => {
+      if (!cancelledRef.current) setVisible(true)
+    }, SHOW_LOADER_AFTER_MS)
+
+    const handleVisibility = () => {
+      if (!document.hidden) checkBackend()
+    }
+
+    document.addEventListener("visibilitychange", handleVisibility)
     checkBackend()
 
     return () => {
-      cancelled = true
-      window.clearTimeout(revealTimeout)
-      window.clearTimeout(retryTimeout)
-      activeController?.abort()
-      logStartup("unmounted")
+      cancelledRef.current = true
+      clearTimers()
+      controllerRef.current?.abort()
+      document.removeEventListener("visibilitychange", handleVisibility)
     }
   }, [])
 
-  if (!visible) return null
-
   return (
-    <section className="flow-loader" aria-label="BatPrint startup animation">
-      <div className="flow-backdrop" />
-      <div className="flow-noise" />
-      <div className="flow-grid" />
-
-      <div className="flow-panels" aria-hidden="true">
-        <span className="flow-panel flow-panel-a" />
-        <span className="flow-panel flow-panel-b" />
-        <span className="flow-panel flow-panel-c" />
-      </div>
-
-      <svg className="flow-lines" viewBox="0 0 1440 810" fill="none" aria-hidden="true">
-        <path className="flow-stroke flow-stroke-a" d="M165 548C332 450 527 425 714 472C893 517 1042 501 1275 382" />
-        <path className="flow-stroke flow-stroke-b" d="M220 328C399 286 598 308 787 382C962 451 1114 426 1280 305" />
-        <path className="flow-stroke flow-stroke-c" d="M236 644C430 572 626 570 817 624C988 672 1126 652 1265 570" />
-        <path className="flow-stroke flow-stroke-d" d="M416 249H1024C1084 249 1132 297 1132 357V453" />
-        <path className="flow-stroke flow-stroke-e" d="M1024 661H416C356 661 308 613 308 553V457" />
-      </svg>
-
-      <div className="flow-core" aria-hidden="true">
-        <div className="flow-ring flow-ring-a" />
-        <div className="flow-ring flow-ring-b" />
-        <div className="flow-ring flow-ring-c" />
-        <div className="flow-pulse" />
-        <div className="flow-nodes">
-          {nodes.map((node) => (
-            <span key={node} style={{ "--node": node }} />
-          ))}
-        </div>
-      </div>
-
-      <div className="flow-sweep" aria-hidden="true" />
-    </section>
+    <AnimatePresence>
+      {visible && (
+        <motion.section
+          className="batprint-intro-shell"
+          aria-label="BatPrint startup animation"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.2, ease: "easeOut" }}
+        >
+          <div className="intro">
+            <IntroParticles />
+            <motion.div
+              className="lightSweep"
+              initial={{ x: -900, opacity: 0 }}
+              animate={{ x: 1600, opacity: [0, 0.9, 0.9, 0] }}
+              transition={{ delay: 1.1, duration: 1.25, ease: "easeInOut" }}
+            />
+            <motion.div
+              className="logo-wrapper"
+              initial={{ opacity: 0, scale: 0.55 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 1.2, ease: [0.22, 1, 0.36, 1] }}
+            >
+              <img src="/bat-logo.png" alt="BatPrint" className="bat-logo" />
+            </motion.div>
+            <motion.div
+              className="brandWrapper"
+              initial={{ clipPath: "inset(0 100% 0 0)", opacity: 0 }}
+              animate={{ clipPath: "inset(0 0% 0 0)", opacity: 1 }}
+              transition={{ delay: 1.75, duration: 0.9, ease: [0.22, 1, 0.36, 1] }}
+            >
+              <h1 className="brandTitle">BATPRINT</h1>
+            </motion.div>
+            <motion.div
+              className="taglineWrapper"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 2.5, duration: 0.8, ease: "easeOut" }}
+            >
+              <div className="taglineLine" />
+              <p className="tagline">Print. Bind. Deliver.</p>
+            </motion.div>
+          </div>
+        </motion.section>
+      )}
+    </AnimatePresence>
   )
 }
 

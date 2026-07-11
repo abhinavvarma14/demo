@@ -1,7 +1,37 @@
 import axios from "axios"
 import { clearAuth, getToken, isLoggedIn } from "../utils/auth"
 
-export const API_BASE_URL = "https://demo-production-902a.up.railway.app"
+const DEFAULT_API_BASE_URL = "https://demo-production-902a.up.railway.app"
+const LOCAL_API_BASE_URL = "http://127.0.0.1:8000"
+const RAILWAY_API_PATTERN = /demo-production-[^.]+\.up\.railway\.app/i
+
+const isLocalFrontend = () =>
+  typeof window !== "undefined" &&
+  ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname)
+
+const normalizeBaseUrl = (value) => {
+  const trimmed = String(value || "").trim()
+  const runningLocally = isLocalFrontend()
+
+  if (!trimmed) return runningLocally ? LOCAL_API_BASE_URL : DEFAULT_API_BASE_URL
+
+  const normalized = trimmed.startsWith("http://") || trimmed.startsWith("https://")
+    ? trimmed.replace(/\/+$/, "")
+    : `https://${trimmed.replace(/\/+$/, "")}`
+
+  if (runningLocally && RAILWAY_API_PATTERN.test(normalized)) return LOCAL_API_BASE_URL
+  if (RAILWAY_API_PATTERN.test(normalized) || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(normalized)) return normalized
+  return DEFAULT_API_BASE_URL
+}
+
+export const API_BASE_URL = normalizeBaseUrl(import.meta.env.VITE_API_URL)
+
+export const createIdempotencyKey = (scope = "request") => {
+  const randomPart = typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  return `${scope}:${randomPart}`
+}
 
 if (import.meta.env.DEV) {
   console.info("[batprint] API base URL:", API_BASE_URL)
@@ -183,4 +213,5 @@ API.interceptors.response.use(
 )
 
 export default API
+
 

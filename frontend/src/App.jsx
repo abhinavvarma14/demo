@@ -1,12 +1,11 @@
-import { lazy, Suspense, useEffect } from "react"
-import { AnimatePresence, motion } from "framer-motion"
+import { lazy, Suspense } from "react"
 import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom"
 import Navbar from "./components/Navbar"
 import BottomNav from "./components/BottomNav"
 import ProtectedRoute from "./components/ProtectedRoute"
 import Footer from "./components/Footer"
 import StartupLoader from "./components/StartupLoader"
-import { prefetchWhenIdle, routeLoaders } from "./utils/routePrefetch"
+import { routeLoaders } from "./utils/routePrefetch"
 
 const Home = lazy(routeLoaders["/"])
 const Signup = lazy(routeLoaders["/signup"])
@@ -42,26 +41,14 @@ function AppRoutes() {
   const location = useLocation()
   const showBottomNav = !location.pathname.startsWith("/admin") && !location.pathname.startsWith("/delivery")
 
-  useEffect(() => {
-    prefetchWhenIdle(["/upload", "/cart", "/profile", "/orders"])
-  }, [])
-
   return (
     <div className="flex min-h-screen flex-col">
       <Navbar />
 
       <main className="flex-1">
-        <AnimatePresence mode="wait">
-          <motion.div
-            className="route-panel"
-            key={location.pathname}
-            initial={{ opacity: 0, y: 4 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -3 }}
-            transition={{ duration: 0.18, ease: "easeOut" }}
-          >
-            <Suspense fallback={<RouteSkeleton />}>
-              <Routes location={location}>
+        <div className="route-panel">
+          <Suspense fallback={<RouteSkeleton />}>
+            <Routes>
                 <Route path="/" element={<Home />} />
                 <Route path="/signup" element={<Signup />} />
                 <Route path="/upload" element={<Upload />} />
@@ -122,10 +109,9 @@ function AppRoutes() {
                     </ProtectedRoute>
                   }
                 />
-              </Routes>
-            </Suspense>
-          </motion.div>
-        </AnimatePresence>
+            </Routes>
+          </Suspense>
+        </div>
       </main>
 
       {showBottomNav && <BottomNav />}

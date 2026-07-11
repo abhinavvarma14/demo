@@ -113,6 +113,77 @@ def test_signup_rejects_duplicate_username(client):
     assert second.json()["detail"] == "Username already exists"
 
 
+def test_cart_order_creation_is_idempotent_without_header(client):
+    signup(client, username="idembuyer")
+    token = login(client, username="idembuyer").json()["access_token"]
+
+    first_book = client.get("/books", headers=auth_headers(token)).json()[0]
+    first_option = first_book["options"][0]
+    add_cart_response = client.post(
+        "/cart/items",
+        json={
+            "item_type": "book",
+            "book_id": first_book["id"],
+            "mode": first_option["mode"],
+            "print_type": first_option["print_type"],
+            "quantity": 1,
+        },
+        headers=auth_headers(token),
+    )
+    assert add_cart_response.status_code == 200
+
+    payload = {
+        "delivery_type": "hostel",
+        "hostel_name": "Himalaya",
+        "contact_number": "9876543210",
+        "alternate_contact_number": "",
+    }
+    first = client.post("/orders", json=payload, headers=auth_headers(token))
+    second = client.post("/orders", json=payload, headers=auth_headers(token))
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["order_id"] == first.json()["order_id"]
+
+
+def test_payment_verification_is_idempotent_without_header(client):
+    signup(client, username="verifybuyer")
+    token = login(client, username="verifybuyer").json()["access_token"]
+
+    first_book = client.get("/books", headers=auth_headers(token)).json()[0]
+    first_option = first_book["options"][0]
+    client.post(
+        "/cart/items",
+        json={
+            "item_type": "book",
+            "book_id": first_book["id"],
+            "mode": first_option["mode"],
+            "print_type": first_option["print_type"],
+            "quantity": 1,
+        },
+        headers=auth_headers(token),
+    )
+    order_response = client.post(
+        "/orders",
+        json={
+            "delivery_type": "hostel",
+            "hostel_name": "Himalaya",
+            "contact_number": "9876543210",
+            "alternate_contact_number": "",
+        },
+        headers=auth_headers(token),
+    )
+    order_id = order_response.json()["order_id"]
+    payload = {"order_id": order_id, "utr_number": "UTR123456", "transaction_id": "TXN123456"}
+
+    first = client.post("/payment/submit-verification", json=payload, headers=auth_headers(token))
+    second = client.post("/payment/submit-verification", json=payload, headers=auth_headers(token))
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["order_id"] == order_id
+
+
 def test_login_rejects_invalid_credentials(client):
     signup(client)
     response = login(client, password="Wrongpass123!")
@@ -197,7 +268,7 @@ def test_delivery_role_can_view_and_complete_delivery_orders(client, app_module)
     create_admin(app_module)
     admin_token = login(client, username="adminuser").json()["access_token"]
     ready_response = client.put(
-        f"/admin/orders/{order_id}/status?status=ready",
+        f"/admin/orders/{order_id}/status?status=ready_for_delivery",
         headers=auth_headers(admin_token),
     )
     assert ready_response.status_code == 200
@@ -209,6 +280,8 @@ def test_delivery_role_can_view_and_complete_delivery_orders(client, app_module)
     assert delivery_orders_response.status_code == 200
     delivery_orders = delivery_orders_response.json()
     assert len(delivery_orders) == 1
+    assert delivery_orders[0]["status"] == "ready_for_delivery"
+    assert delivery_orders[0]["user_name"] == "buyer"
     assert delivery_orders[0]["contact_number"] == "9876543210"
     assert delivery_orders[0]["hostel_name"] == "Himalaya"
     assert len(delivery_orders[0]["items"]) == 1

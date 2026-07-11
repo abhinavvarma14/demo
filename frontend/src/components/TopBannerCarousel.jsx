@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { AnimatePresence, motion } from "framer-motion"
 import API, { API_BASE_URL } from "../api/api"
 
@@ -6,7 +6,11 @@ const AUTO_SLIDE_DELAY = 6500
 const IDLE_RESUME_DELAY = 4200
 const SWIPE_CONFIDENCE = 9000
 
-const isMobileDevice = () => /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+const getBannerImage = (banner, mobileView) => {
+  if (!banner) return ""
+  if (mobileView) return banner.mobile_image_url || banner.mobile_image || banner.image_url || banner.image || ""
+  return banner.image_url || banner.image || banner.mobile_image_url || banner.mobile_image || ""
+}
 
 const resolveBannerImage = (image) => {
   if (!image) return ""
@@ -22,29 +26,45 @@ function TopBannerCarousel() {
   const [direction, setDirection] = useState(1)
   const [isPaused, setIsPaused] = useState(false)
   const [isVisible, setIsVisible] = useState(true)
-  const mobileView = isMobileDevice()
+  const [mobileView, setMobileView] = useState(() =>
+    typeof window !== "undefined" ? window.matchMedia("(max-width: 767px)").matches : false
+  )
   const rootRef = useRef(null)
   const slideTimerRef = useRef(null)
   const resumeTimerRef = useRef(null)
   const dragMovedRef = useRef(false)
 
-  useEffect(() => {
-    const fetchBanners = async () => {
-      try {
-        const res = await API.get("/api/banners")
-        setBanners((res.data || []).filter((banner) => banner.active))
-      } catch (error) {
-        console.log(error)
-      }
+  const fetchBanners = useCallback(async ({ bypassCache = false } = {}) => {
+    try {
+      const res = await API.get("/api/banners", { cache: !bypassCache })
+      setBanners((res.data || []).filter((banner) => banner.active))
+    } catch (error) {
+      console.log(error)
     }
-
-    fetchBanners()
   }, [])
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return undefined
+    const query = window.matchMedia("(max-width: 767px)")
+    const handleChange = () => setMobileView(query.matches)
+    query.addEventListener?.("change", handleChange)
+    return () => query.removeEventListener?.("change", handleChange)
+  }, [])
+
+  useEffect(() => {
+    const initialFetch = window.setTimeout(() => fetchBanners(), 0)
+    const handleCacheInvalidated = () => fetchBanners({ bypassCache: true })
+    window.addEventListener("api-cache-invalidated", handleCacheInvalidated)
+    return () => {
+      window.clearTimeout(initialFetch)
+      window.removeEventListener("api-cache-invalidated", handleCacheInvalidated)
+    }
+  }, [fetchBanners])
 
   const preparedBanners = useMemo(
     () =>
       banners.map((banner) => {
-        const imageToUse = mobileView ? banner.mobile_image || banner.image : banner.image
+        const imageToUse = getBannerImage(banner, mobileView)
         return {
           ...banner,
           imageSrc: resolveBannerImage(imageToUse),
@@ -88,25 +108,13 @@ function TopBannerCarousel() {
   }, [])
 
   useEffect(() => {
-    const handleActivity = () => pauseAuto()
-    const handleVisibility = () => {
-      setIsPaused(document.hidden)
-      if (!document.hidden) pauseAuto(1200)
-    }
-
-    window.addEventListener("scroll", handleActivity, { passive: true })
-    window.addEventListener("touchstart", handleActivity, { passive: true })
-    window.addEventListener("pointerdown", handleActivity, { passive: true })
+    const handleVisibility = () => setIsPaused(document.hidden)
     document.addEventListener("visibilitychange", handleVisibility)
-
     return () => {
-      window.removeEventListener("scroll", handleActivity)
-      window.removeEventListener("touchstart", handleActivity)
-      window.removeEventListener("pointerdown", handleActivity)
       document.removeEventListener("visibilitychange", handleVisibility)
       window.clearTimeout(resumeTimerRef.current)
     }
-  }, [pauseAuto])
+  }, [])
 
   useEffect(() => {
     window.clearTimeout(slideTimerRef.current)
@@ -157,6 +165,9 @@ function TopBannerCarousel() {
           src={banner.imageSrc}
           alt={banner.title || "Banner"}
           className="banner-img h-full w-full object-cover object-center"
+          loading="lazy"
+          decoding="async"
+          fetchPriority={safeActiveIndex === 0 ? "high" : "auto"}
           custom={direction}
           initial={{ opacity: 0, x: direction * 28, scale: 1.012 }}
           animate={{ opacity: 1, x: 0, scale: 1 }}
@@ -291,4 +302,4 @@ function TopBannerCarousel() {
   )
 }
 
-export default TopBannerCarousel
+export default memo(TopBannerCarousel)

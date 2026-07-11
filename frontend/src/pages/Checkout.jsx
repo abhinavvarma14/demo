@@ -5,11 +5,25 @@ import { useNavigate } from "react-router-dom"
 import toast from "react-hot-toast"
 
 import API from "../api/api"
+import LoadingButton from "../components/LoadingButton"
 import { isLoggedIn } from "../utils/auth"
 import { getApiErrorMessage } from "../utils/apiError"
 
 const UPI_ID = "9052612456-3@ybl"
 const hostelOptions = ["Himalaya", "Lotus", "Tulip", "Aravali", "Vindhya", "Kailash", "Outside Hostel"]
+const CHECKOUT_FORM_KEY = "batprint.checkout.form"
+const CHECKOUT_ORDER_KEY = "batprint.checkout.orderKey"
+const CHECKOUT_VERIFY_KEY = "batprint.checkout.verifyKey"
+
+const getStableKey = (storageKey) => {
+  const existing = sessionStorage.getItem(storageKey)
+  if (existing) return existing
+  const next = typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`
+  sessionStorage.setItem(storageKey, next)
+  return next
+}
 
 function CopyIcon({ value, label }) {
   const [copied, setCopied] = useState(false)
@@ -119,32 +133,37 @@ function SuccessScreen() {
 function Checkout() {
   const navigate = useNavigate()
   const [step, setStep] = useState("payment")
-  const [form, setForm] = useState({
-    userName: "",
-    contact: "",
-    alternate: "",
-    deliveryType: "hostel",
-    hostel: "",
-    utrNumber: "",
-    transactionId: "",
+  const [form, setForm] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem(CHECKOUT_FORM_KEY)
+      if (saved) return JSON.parse(saved)
+    } catch {
+      sessionStorage.removeItem(CHECKOUT_FORM_KEY)
+    }
+    return {
+      userName: "",
+      contact: "",
+      alternate: "",
+      deliveryType: "hostel",
+      hostel: "",
+      utrNumber: "",
+      transactionId: "",
+    }
   })
   const [total, setTotal] = useState(0)
   const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState(false)
 
   const amount = useMemo(() => Math.max(0, Math.round(Number(total || 0))), [total])
-  const upiUrl = useMemo(() => {
+  const qrUrl = useMemo(() => {
     const params = new URLSearchParams({
       pa: UPI_ID,
       am: String(amount),
       cu: "INR",
       tn: "BatPrint order payment",
     })
-    return `upi://pay?${params.toString()}`
+    return `https://api.qrserver.com/v1/create-qr-code/?size=360x360&margin=12&data=${encodeURIComponent(`upi://pay?${params.toString()}`)}`
   }, [amount])
-  const qrUrl = useMemo(
-    () => `https://api.qrserver.com/v1/create-qr-code/?size=360x360&margin=12&data=${encodeURIComponent(upiUrl)}`,
-    [upiUrl]
-  )
 
   const normalizePhoneInput = (value) => value.replace(/\D/g, "").slice(0, 10)
 
@@ -177,11 +196,15 @@ function Checkout() {
     loadCartTotal()
   }, [navigate])
 
+  useEffect(() => {
+    sessionStorage.setItem(CHECKOUT_FORM_KEY, JSON.stringify(form))
+  }, [form])
+
   const updateForm = (field, value) => {
     setForm((current) => ({ ...current, [field]: value }))
   }
 
-  const validateVerification = () => {
+  const validateVerification = useCallback(() => {
     if (!form.userName.trim()) return "Please enter your name"
     if (!/^\d{10}$/.test(form.contact)) return "Phone number must be exactly 10 digits"
     if (form.alternate && !/^\d{10}$/.test(form.alternate)) return "Alternate number must be exactly 10 digits"
@@ -190,9 +213,13 @@ function Checkout() {
     if (!form.transactionId.trim()) return "Transaction ID is required"
     if (amount <= 0) return "Cart total is empty"
     return ""
-  }
+  }, [amount, form])
+
+  const canSubmitVerification = useMemo(() => !validateVerification(), [validateVerification])
 
   const submitVerification = async () => {
+    if (submitting) return
+
     if (!isLoggedIn()) {
       toast.error("Please login to continue")
       navigate("/login")
@@ -207,28 +234,36 @@ function Checkout() {
 
     try {
       setSubmitting(true)
+      setSubmitError(false)
+      const orderKey = getStableKey(CHECKOUT_ORDER_KEY)
+      const verificationKey = getStableKey(CHECKOUT_VERIFY_KEY)
       const orderResponse = await API.post("/orders", {
         user_name: form.userName.trim(),
         delivery_type: form.deliveryType,
         hostel_name: form.deliveryType === "hostel" ? form.hostel : null,
         contact_number: form.contact,
         alternate_contact_number: form.alternate || null,
-      })
+      }, { headers: { "Idempotency-Key": orderKey } })
 
       const verificationResponse = await API.post("/payment/submit-verification", {
         order_id: orderResponse.data.order_id,
         utr_number: form.utrNumber.trim(),
         transaction_id: form.transactionId.trim(),
-      })
+      }, { headers: { "Idempotency-Key": verificationKey } })
 
       if (verificationResponse.data?.success === false) {
+        setSubmitError(true)
         toast.error(verificationResponse.data.message || "Payment details rejected")
         return
       }
 
+      sessionStorage.removeItem(CHECKOUT_FORM_KEY)
+      sessionStorage.removeItem(CHECKOUT_ORDER_KEY)
+      sessionStorage.removeItem(CHECKOUT_VERIFY_KEY)
       setStep("success")
     } catch (error) {
       console.log(error)
+      setSubmitError(true)
       toast.error(getApiErrorMessage(error, "Unable to submit payment details"))
     } finally {
       setSubmitting(false)
@@ -252,13 +287,9 @@ function Checkout() {
 
         <AnimatePresence mode="wait">
           {step === "payment" && (
-            <motion.section
+            <section
               key="payment"
               className="premium-card payment-shell overflow-hidden rounded-2xl border border-white/10 bg-[#0d0f12] p-5 md:p-7"
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.34, ease: "easeOut" }}
             >
               <div className="grid gap-6 lg:grid-cols-[1fr_420px] lg:items-center">
                 <div className="space-y-5">
@@ -293,16 +324,6 @@ function Checkout() {
                     </div>
                   </div>
 
-                  {/* Mobile: UPI deep link only on mobile */}
-                  <div className="mobile-payment-actions">
-                    <a
-                      href={upiUrl}
-                      className="flex w-full items-center justify-center gap-2 rounded-xl border border-yellow-400/20 bg-yellow-400/10 px-4 py-3 text-sm font-semibold text-yellow-200 transition hover:bg-yellow-400/15"
-                    >
-                      Pay with UPI App
-                    </a>
-                  </div>
-
                   {/* Paid Button */}
                   <button
                     type="button"
@@ -313,24 +334,24 @@ function Checkout() {
                   </button>
                 </div>
 
-                {/* Desktop QR */}
-                <motion.div
-                  className="desktop-qr-card relative hidden rounded-3xl border border-yellow-400/25 bg-black/35 p-6 lg:block"
-                  initial={{ opacity: 0, scale: 0.97 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  transition={{ duration: 0.42, ease: "easeOut", delay: 0.08 }}
-                >
-                  <div className="qr-shimmer" />
-                  <div className="relative rounded-2xl bg-white p-4">
-                    <img src={qrUrl} alt="BatPrint UPI QR code" className="mx-auto h-[330px] w-[330px]" />
+                <div className="payment-qr-card relative rounded-3xl border border-yellow-400/25 bg-black/35 p-4 sm:p-5 lg:p-6">
+                  <div className="relative rounded-2xl bg-white p-3 sm:p-4">
+                    <img
+                      src={qrUrl}
+                      alt="BatPrint UPI QR code"
+                      className="mx-auto aspect-square w-full max-w-[330px]"
+                      loading="eager"
+                      decoding="async"
+                      fetchPriority="high"
+                    />
                   </div>
                   <div className="relative mt-4 flex items-center justify-center gap-2 text-sm font-semibold text-green-200">
                     <ShieldCheck className="h-4 w-4" />
                     Secure UPI payment
                   </div>
-                </motion.div>
+                </div>
               </div>
-            </motion.section>
+            </section>
           )}
 
           {step === "verify" && (
@@ -455,13 +476,18 @@ function Checkout() {
                 >
                   Back
                 </button>
-                <button
+                <LoadingButton
                   onClick={submitVerification}
-                  disabled={submitting}
+                  loading={submitting}
+                  error={submitError}
+                  disabled={!canSubmitVerification || submitting}
+                  loadingText="Submitting..."
+                  errorText="Try Again"
                   className="rounded-xl bg-yellow-400 px-5 py-3 font-semibold text-black transition hover:bg-yellow-300 disabled:opacity-60"
+                  title={validateVerification() || undefined}
                 >
-                  {submitting ? "Submitting..." : "Submit Verification"}
-                </button>
+                  Submit Verification
+                </LoadingButton>
               </div>
             </motion.section>
           )}
@@ -492,43 +518,12 @@ function Checkout() {
         </AnimatePresence>
 
         <style>{`
-          .payment-shell,
-          .desktop-qr-card {
-            will-change: transform, opacity;
+          .payment-shell {
+            contain: content;
           }
 
-          .desktop-qr-card::before {
-            content: "";
-            position: absolute;
-            inset: -1px;
-            border-radius: inherit;
-            background: linear-gradient(135deg, rgba(250, 204, 21, 0.42), transparent 32%, rgba(255, 255, 255, 0.1), transparent 68%, rgba(250, 204, 21, 0.25));
-            opacity: 0.72;
-            pointer-events: none;
-          }
-
-          .qr-shimmer {
-            position: absolute;
-            inset: 0;
-            overflow: hidden;
-            border-radius: inherit;
-            pointer-events: none;
-          }
-
-          .qr-shimmer::after {
-            content: "";
-            position: absolute;
-            inset: -45% auto -45% -40%;
-            width: 42%;
-            transform: translate3d(-120%, 0, 0) rotate(18deg);
-            background: linear-gradient(90deg, transparent, rgba(250, 204, 21, 0.16), transparent);
-            animation: qr-sweep 4.8s ease-in-out infinite;
-            will-change: transform;
-          }
-
-          @keyframes qr-sweep {
-            0%, 28% { transform: translate3d(-120%, 0, 0) rotate(18deg); }
-            70%, 100% { transform: translate3d(420%, 0, 0) rotate(18deg); }
+          .payment-qr-card {
+            contain: paint;
           }
 
           .copy-icon-btn {
@@ -571,16 +566,6 @@ function Checkout() {
           .paid-btn:hover::after {
             transform: translateX(100%);
             transition: transform 0.6s ease;
-          }
-
-          .mobile-payment-actions {
-            display: block;
-          }
-
-          @media (min-width: 1024px) {
-            .mobile-payment-actions {
-              display: none;
-            }
           }
 
           /* Success Screen */
@@ -706,5 +691,3 @@ function Checkout() {
 }
 
 export default Checkout
-
-

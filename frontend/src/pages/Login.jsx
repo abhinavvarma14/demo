@@ -1,7 +1,6 @@
 import { useState } from "react"
-import { AnimatePresence, motion } from "framer-motion"
 import { useNavigate } from "react-router-dom"
-import { postWithFallback } from "../api/api"
+import API from "../api/api"
 import toast from "react-hot-toast"
 import { getUserRole, setToken } from "../utils/auth"
 import { getApiErrorMessage } from "../utils/apiError"
@@ -23,22 +22,23 @@ if (submitting) {
   return
 }
 
+const normalizedUsername = username.trim()
+
+if (!normalizedUsername || !password) {
+  setFormError("Username and password are required.")
+  return
+}
+
 try {
   setSubmitting(true)
   setFormError("")
-  const normalizedUsername = username.trim()
-
-  if (!normalizedUsername || !password) {
-    setFormError("Username and password are required.")
-    return
-  }
 
   const params = new URLSearchParams()
 
   params.append("username", normalizedUsername)
   params.append("password", password)
 
-  const res = await postWithFallback(["/login", "/auth/login"], params, {
+  const res = await API.post("/login", params, {
     headers: {
       "Content-Type": "application/x-www-form-urlencoded"
     }
@@ -124,19 +124,11 @@ return (
       className="w-full bg-white/5 border border-white/10 rounded-xl p-3"
     />
 
-    <AnimatePresence mode="wait">
-      {formError && (
-        <motion.p
-          key={formError}
-          initial={{ opacity: 0, y: -6 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -6 }}
-          className="text-red-500 text-sm mt-2"
-        >
-          {formError}
-        </motion.p>
-      )}
-    </AnimatePresence>
+    {formError && (
+      <p className="text-red-500 text-sm mt-2" role="alert">
+        {formError}
+      </p>
+    )}
 
     <button
       type="submit"

@@ -1,3 +1,5 @@
+import hashlib
+import json
 import os
 import shutil
 import uuid
@@ -14,7 +16,7 @@ from urllib.parse import quote
 from xml.sax.saxutils import escape
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -105,7 +107,7 @@ def build_cors_origins() -> list[str]:
 
 CORS_ORIGINS = build_cors_origins()
 CORS_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
-CORS_HEADERS = ["Accept", "Content-Type", "Authorization", "x-api-key", "X-Requested-With"]
+CORS_HEADERS = ["Accept", "Content-Type", "Authorization", "Idempotency-Key", "x-api-key", "X-Requested-With"]
 CORS_HEADER_VALUE = ", ".join(CORS_HEADERS)
 CORS_METHOD_VALUE = ", ".join(CORS_METHODS)
 
@@ -513,6 +515,8 @@ def sync_schema():
             "utr": "ALTER TABLE orders ADD COLUMN utr VARCHAR",
             "utr_number": "ALTER TABLE orders ADD COLUMN utr_number VARCHAR",
             "transaction_id": "ALTER TABLE orders ADD COLUMN transaction_id VARCHAR",
+            "idempotency_key": "ALTER TABLE orders ADD COLUMN idempotency_key VARCHAR",
+            "payment_verification_key": "ALTER TABLE orders ADD COLUMN payment_verification_key VARCHAR",
             "fraud_flag": "ALTER TABLE orders ADD COLUMN fraud_flag BOOLEAN DEFAULT FALSE",
             "verification_notes": "ALTER TABLE orders ADD COLUMN verification_notes VARCHAR",
             "unique_amount": "ALTER TABLE orders ADD COLUMN unique_amount FLOAT",
@@ -571,6 +575,8 @@ def sync_schema():
             "CREATE INDEX IF NOT EXISTS ix_support_messages_thread_id ON support_messages (thread_id)",
             "CREATE INDEX IF NOT EXISTS ix_orders_utr ON orders (utr)",
             "CREATE INDEX IF NOT EXISTS ix_orders_transaction_id ON orders (transaction_id)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_orders_idempotency_key_unique ON orders (idempotency_key) WHERE idempotency_key IS NOT NULL",
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_orders_payment_verification_key_unique ON orders (payment_verification_key) WHERE payment_verification_key IS NOT NULL",
         ]:
             connection.execute(text(statement))
 
@@ -870,32 +876,8 @@ def now_utc() -> datetime:
 
 
 def serialize_delivery_order(order: models.Order):
-    return {
-        "id": order.id,
-        "delivery_type": order.delivery_type,
-        "hostel_name": order.hostel_name,
-        "contact_number": order.contact_number,
-        "alternate_contact_number": order.alternate_contact_number,
-        "status": order.status,
-        "created_at": order.created_at.isoformat() if order.created_at else None,
-        "user": {
-            "id": order.user.id if order.user else None,
-            "username": order.user.username if order.user else "",
-        },
-        "items": [
-            {
-                "id": item.id,
-                "item_name": item.item_name or (item.book.name if item.book else item.original_filename or "Unnamed item"),
-                "quantity": item.quantity,
-                "stored_filename": item.stored_filename,
-                "leave_date": item.leave_date,
-                "leave_to_date": item.leave_to_date,
-                "request_reason": item.request_reason,
-            }
-            for item in order.items
-        ],
-    }
-
+    # Keep the delivery-role payload aligned with the admin delivery queue.
+    return serialize_order(order, include_user=True)
 
 def serialize_support_message(message: models.SupportMessage):
     return {
@@ -1692,164 +1674,264 @@ def create_order(
     order: schemas.OrderCreate,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
-    cart_items = (
-        db.query(models.CartItem)
-        .options(joinedload(models.CartItem.upload), joinedload(models.CartItem.book))
-        .filter(models.CartItem.user_id == current_user.id)
-        .all()
-    )
-    if not cart_items:
-        raise HTTPException(status_code=400, detail="Cart is empty")
+    request_key = normalize_idempotency_key(idempotency_key)
+    effective_key = request_key
 
-    total_amount = sum((item.total_price or item.calculated_price or 0) for item in cart_items)
-    new_order = models.Order(
-        user_id=current_user.id,
-        user_name=order.user_name or current_user.username,
-        phone_number=order.contact_number,
-        hostel=order.hostel_name if order.delivery_type == "hostel" else "Day Scholar",
-        delivery_type=order.delivery_type,
-        hostel_name=order.hostel_name,
-        contact_number=order.contact_number,
-        alternate_contact_number=order.alternate_contact_number,
-        amount=total_amount,
-        total_amount=total_amount,
-        payment_status="pending_verification",
-        payment_method="UPI",
-        status="pending_verification",
-    )
-    db.add(new_order)
-    db.flush()
-
-    for cart_item in cart_items:
-        upload = cart_item.upload
-        db.add(
-            models.OrderItem(
-                order_id=new_order.id,
-                item_type=cart_item.item_type,
-                reference_id=cart_item.reference_id,
-                book_id=cart_item.book_id,
-                upload_id=cart_item.upload_id,
-                item_name=cart_item.item_name,
-                stored_filename=upload.stored_filename if upload else None,
-                original_filename=upload.original_filename if upload else None,
-                total_pages=upload.total_pages if upload else None,
-                mode=cart_item.mode,
-                print_type=cart_item.print_type,
-                quantity=cart_item.quantity,
-                unit_price=cart_item.unit_price,
-                calculated_price=cart_item.calculated_price,
-                total_price=cart_item.total_price or cart_item.calculated_price,
-                leave_date=cart_item.leave_date,
-                leave_to_date=cart_item.leave_to_date,
-                request_reason=cart_item.request_reason,
-            )
+    try:
+        cart_items = (
+            db.query(models.CartItem)
+            .options(joinedload(models.CartItem.upload), joinedload(models.CartItem.book))
+            .filter(models.CartItem.user_id == current_user.id)
+            .all()
         )
+        if not cart_items:
+            raise HTTPException(status_code=400, detail="Cart is empty")
 
-    db.commit()
-    db.refresh(new_order)
+        effective_key = request_key or build_cart_order_idempotency_key(current_user.id, order, cart_items)
+        existing_order = get_idempotent_order(db, effective_key, current_user.id)
+        if existing_order:
+            return order_payment_response(existing_order)
+
+        total_amount = sum((item.total_price or item.calculated_price or 0) for item in cart_items)
+        new_order = models.Order(
+            user_id=current_user.id,
+            user_name=order.user_name or current_user.username,
+            phone_number=order.contact_number,
+            hostel=order.hostel_name if order.delivery_type == "hostel" else "Day Scholar",
+            delivery_type=order.delivery_type,
+            hostel_name=order.hostel_name,
+            contact_number=order.contact_number,
+            alternate_contact_number=order.alternate_contact_number,
+            amount=total_amount,
+            total_amount=total_amount,
+            payment_status="pending_verification",
+            payment_method="UPI",
+            status="pending_verification",
+            idempotency_key=effective_key,
+        )
+        db.add(new_order)
+        db.flush()
+
+        for cart_item in cart_items:
+            upload = cart_item.upload
+            db.add(
+                models.OrderItem(
+                    order_id=new_order.id,
+                    item_type=cart_item.item_type,
+                    reference_id=cart_item.reference_id,
+                    book_id=cart_item.book_id,
+                    upload_id=cart_item.upload_id,
+                    item_name=cart_item.item_name,
+                    stored_filename=upload.stored_filename if upload else None,
+                    original_filename=upload.original_filename if upload else None,
+                    total_pages=upload.total_pages if upload else None,
+                    mode=cart_item.mode,
+                    print_type=cart_item.print_type,
+                    quantity=cart_item.quantity,
+                    unit_price=cart_item.unit_price,
+                    calculated_price=cart_item.calculated_price,
+                    total_price=cart_item.total_price or cart_item.calculated_price,
+                    leave_date=cart_item.leave_date,
+                    leave_to_date=cart_item.leave_to_date,
+                    request_reason=cart_item.request_reason,
+                )
+            )
+
+        db.commit()
+        db.refresh(new_order)
+    except IntegrityError:
+        db.rollback()
+        existing_order = get_idempotent_order(db, effective_key, current_user.id)
+        if existing_order:
+            return order_payment_response(existing_order)
+        raise HTTPException(status_code=409, detail="Duplicate order request")
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        logger.exception("order creation failed user_id=%s", current_user.id)
+        raise HTTPException(status_code=500, detail="Unable to create order")
+
     logger.info("order created order_id=%s user_id=%s total=%s", new_order.id, current_user.id, new_order.total_amount)
-    return {
-        "order_id": new_order.id,
-        "total_amount": new_order.total_amount,
-        "amount": new_order.amount or new_order.total_amount,
-        "upi_id": UPI_ID,
-        "payment_status": new_order.payment_status,
-    }
+    return order_payment_response(new_order)
 
 
 @app.post("/api/orders")
 def create_api_order(
     payload: schemas.ApiOrderCreate,
     db: Session = Depends(get_db),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     if not payload.items:
         raise HTTPException(status_code=400, detail="At least one item is required")
 
-    user = db.query(models.User).filter(models.User.phone_number == payload.phone_number).first()
-    if user is None:
-        username = build_unique_username(payload.username, payload.phone_number, db)
-        generated_password = generate_system_password()
-        user = models.User(
-            username=username,
-            password_hash=generated_password,
-            password=generated_password,
-            role="user",
+    request_key = normalize_idempotency_key(idempotency_key)
+    effective_key = request_key or make_idempotency_key("api-order", payload.model_dump())
+    existing_order = get_idempotent_order(db, effective_key)
+    if existing_order:
+        return {"order_id": existing_order.id, "total_amount": existing_order.total_amount}
+
+    try:
+        user = db.query(models.User).filter(models.User.phone_number == payload.phone_number).first()
+        if user is None:
+            username = build_unique_username(payload.username, payload.phone_number, db)
+            generated_password = generate_system_password()
+            user = models.User(
+                username=username,
+                password_hash=generated_password,
+                password=generated_password,
+                role="user",
+                phone_number=payload.phone_number,
+                hostel=payload.hostel,
+                alternate_phone=payload.alternate_phone,
+            )
+            db.add(user)
+            db.flush()
+        else:
+            user.username = payload.username.strip() or user.username
+            user.phone_number = payload.phone_number
+            user.hostel = payload.hostel
+            user.alternate_phone = payload.alternate_phone
+
+        order = models.Order(
+            user_id=user.id,
+            user_name=payload.username,
             phone_number=payload.phone_number,
             hostel=payload.hostel,
-            alternate_phone=payload.alternate_phone,
+            delivery_type="hostel",
+            hostel_name=payload.hostel,
+            contact_number=payload.phone_number,
+            alternate_contact_number=payload.alternate_phone,
+            amount=0,
+            total_amount=0,
+            payment_status="pending_verification",
+            payment_method="UPI",
+            status="pending_verification",
+            idempotency_key=effective_key,
         )
-        db.add(user)
+        db.add(order)
         db.flush()
-    else:
-        user.username = payload.username.strip() or user.username
-        user.phone_number = payload.phone_number
-        user.hostel = payload.hostel
-        user.alternate_phone = payload.alternate_phone
 
-    order = models.Order(
-        user_id=user.id,
-        delivery_type="hostel",
-        hostel_name=payload.hostel,
-        contact_number=payload.phone_number,
-        alternate_contact_number=payload.alternate_phone,
-        amount=0,
-        total_amount=0,
-        payment_status="pending_verification",
-        payment_method="UPI",
-        status="pending_verification",
-    )
-    db.add(order)
-    db.flush()
-
-    total_amount = 0.0
-    for requested_item in payload.items:
-        book = (
-            db.query(models.Book)
-            .options(joinedload(models.Book.options))
-            .filter(models.Book.id == requested_item.book_id, models.Book.is_active.is_(True))
-            .first()
-        )
-        if not book:
-            raise HTTPException(status_code=404, detail=f"Book {requested_item.book_id} not found")
-
-        if requested_item.mode is not None or requested_item.print_type is not None:
-            option = get_book_option(
-                db,
-                requested_item.book_id,
-                requested_item.mode or "",
-                requested_item.print_type or "",
+        total_amount = 0.0
+        for requested_item in payload.items:
+            book = (
+                db.query(models.Book)
+                .options(joinedload(models.Book.options))
+                .filter(models.Book.id == requested_item.book_id, models.Book.is_active.is_(True))
+                .first()
             )
-        else:
-            option = sorted(book.options, key=lambda item: item.price)[0] if book.options else None
+            if not book:
+                raise HTTPException(status_code=404, detail=f"Book {requested_item.book_id} not found")
 
-        if option is None:
-            raise HTTPException(status_code=400, detail=f"Book {book.name} does not have pricing configured")
+            if requested_item.mode is not None or requested_item.print_type is not None:
+                option = get_book_option(
+                    db,
+                    requested_item.book_id,
+                    requested_item.mode or "",
+                    requested_item.print_type or "",
+                )
+            else:
+                option = sorted(book.options, key=lambda item: item.price)[0] if book.options else None
 
-        line_total = option.price * requested_item.quantity
-        total_amount += line_total
-        db.add(
-            models.OrderItem(
-                order_id=order.id,
-                item_type="book",
-                reference_id=book.id,
-                book_id=book.id,
-                item_name=book.name,
-                mode=normalize_book_mode(option.mode),
-                print_type=option.print_type,
-                quantity=requested_item.quantity,
-                unit_price=option.price,
-                calculated_price=line_total,
-                total_price=line_total,
+            if option is None:
+                raise HTTPException(status_code=400, detail=f"Book {book.name} does not have pricing configured")
+
+            line_total = option.price * requested_item.quantity
+            total_amount += line_total
+            db.add(
+                models.OrderItem(
+                    order_id=order.id,
+                    item_type="book",
+                    reference_id=book.id,
+                    book_id=book.id,
+                    item_name=book.name,
+                    mode=normalize_book_mode(option.mode),
+                    print_type=option.print_type,
+                    quantity=requested_item.quantity,
+                    unit_price=option.price,
+                    calculated_price=line_total,
+                    total_price=line_total,
+                )
             )
-        )
 
-    order.amount = total_amount
-    order.total_amount = total_amount
-    db.commit()
-    db.refresh(order)
+        order.amount = total_amount
+        order.total_amount = total_amount
+        db.commit()
+        db.refresh(order)
+    except IntegrityError:
+        db.rollback()
+        existing_order = get_idempotent_order(db, effective_key)
+        if existing_order:
+            return {"order_id": existing_order.id, "total_amount": existing_order.total_amount}
+        raise HTTPException(status_code=409, detail="Duplicate order request")
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        logger.exception("api order creation failed")
+        raise HTTPException(status_code=500, detail="Unable to create order")
+
     logger.info("api order created order_id=%s user_id=%s total=%s", order.id, user.id, total_amount)
     return {"order_id": order.id, "total_amount": order.total_amount}
+
+
+
+def make_idempotency_key(namespace: str, *parts):
+    payload = json.dumps(parts, sort_keys=True, default=str, separators=(",", ":"))
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return f"{namespace}:{digest}"
+
+
+def build_cart_order_idempotency_key(user_id: int, order: schemas.OrderCreate, cart_items):
+    item_fingerprint = [
+        {
+            "id": item.id,
+            "type": item.item_type,
+            "book_id": item.book_id,
+            "upload_id": item.upload_id,
+            "mode": item.mode,
+            "print_type": item.print_type,
+            "quantity": item.quantity,
+            "unit_price": item.unit_price,
+            "total_price": item.total_price or item.calculated_price,
+        }
+        for item in sorted(cart_items, key=lambda cart_item: cart_item.id)
+    ]
+    return make_idempotency_key("cart-order", user_id, order.model_dump(), item_fingerprint)
+
+
+def normalize_idempotency_key(value: str | None):
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if len(normalized) > 160:
+        raise HTTPException(status_code=400, detail="Idempotency key is too long")
+    return normalized
+
+
+def order_payment_response(order: models.Order):
+    return {
+        "order_id": order.id,
+        "total_amount": order.total_amount,
+        "amount": order.amount or order.total_amount,
+        "upi_id": UPI_ID,
+        "payment_status": order.payment_status,
+    }
+
+
+def get_idempotent_order(db: Session, idempotency_key: str | None, user_id: int | None = None):
+    if not idempotency_key:
+        return None
+    query = db.query(models.Order).filter(models.Order.idempotency_key == idempotency_key)
+    if user_id is not None:
+        query = query.filter(models.Order.user_id == user_id)
+    return query.first()
 
 def _find_duplicate_payment_reference(db: Session, order_id: int, utr_number: str, transaction_id: str):
     normalized_utr = utr_number.strip().lower()
@@ -1893,29 +1975,58 @@ def _mark_duplicate_payment_attempt(db: Session, order: models.Order, message: s
 def verify_api_order(
     payload: schemas.ApiOrderVerify,
     db: Session = Depends(get_db),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
-    order = db.query(models.Order).filter(models.Order.id == payload.order_id).first()
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
-
     utr_number = payload.utr_number.strip()
     transaction_id = payload.transaction_id.strip()
-    duplicate_message = _find_duplicate_payment_reference(db, order.id, utr_number, transaction_id)
-    if duplicate_message:
-        _mark_duplicate_payment_attempt(db, order, duplicate_message)
+    verification_key = normalize_idempotency_key(idempotency_key) or make_idempotency_key(
+        "api-payment-verify",
+        payload.model_dump(),
+    )
 
-    order.utr = utr_number
-    order.utr_number = utr_number
-    order.transaction_id = transaction_id
-    order.payment_status = "pending_verification"
-    order.payment_method = "UPI"
-    order.status = "pending_verification"
-    order.fraud_flag = False
-    order.verification_notes = "Awaiting manual admin verification"
-    db.query(models.CartItem).filter(models.CartItem.user_id == order.user_id).delete()
-    db.commit()
+    try:
+        order = db.query(models.Order).filter(models.Order.id == payload.order_id).first()
+        if not order:
+            raise HTTPException(status_code=404, detail="Order not found")
+
+        same_reference = (
+            (order.utr_number or order.utr or "").strip().lower() == utr_number.lower()
+            and (order.transaction_id or "").strip().lower() == transaction_id.lower()
+        )
+        if same_reference or (verification_key and order.payment_verification_key == verification_key):
+            return {"message": "Order verified", "order_id": order.id, "success": True}
+
+        duplicate_message = _find_duplicate_payment_reference(db, order.id, utr_number, transaction_id)
+        if duplicate_message:
+            _mark_duplicate_payment_attempt(db, order, duplicate_message)
+
+        order.utr = utr_number
+        order.utr_number = utr_number
+        order.transaction_id = transaction_id
+        order.payment_verification_key = verification_key
+        order.payment_status = "pending_verification"
+        order.payment_method = "UPI"
+        order.status = "pending_verification"
+        order.fraud_flag = False
+        order.verification_notes = "Awaiting manual admin verification"
+        db.query(models.CartItem).filter(models.CartItem.user_id == order.user_id).delete()
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        order = db.query(models.Order).filter(models.Order.id == payload.order_id).first()
+        if order and verification_key and order.payment_verification_key == verification_key:
+            return {"message": "Order verified", "order_id": order.id, "success": True}
+        raise HTTPException(status_code=409, detail="Duplicate payment verification")
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        logger.exception("api payment verification failed order_id=%s", payload.order_id)
+        raise HTTPException(status_code=500, detail="Unable to verify payment")
+
     logger.info("api order verified order_id=%s", order.id)
-    return {"message": "Order verified", "order_id": order.id}
+    return {"message": "Order verified", "order_id": order.id, "success": True}
 
 
 @app.post("/order/create")
@@ -1923,32 +2034,47 @@ def create_manual_payment_order(
     order: schemas.ManualOrderCreate,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
-    new_order = models.Order(
-        user_id=current_user.id,
-        user_name=order.user_name,
-        phone_number=order.phone_number,
-        hostel=order.hostel if order.delivery_type == "hostel" else "Day Scholar",
-        delivery_type=order.delivery_type,
-        hostel_name=order.hostel if order.delivery_type == "hostel" else None,
-        contact_number=order.phone_number,
-        alternate_contact_number=order.alternate_number or order.alternate_phone,
-        amount=order.amount,
-        total_amount=order.amount,
-        payment_status="pending_verification",
-        payment_method="UPI",
-        status="pending_verification",
-    )
-    db.add(new_order)
-    db.commit()
-    db.refresh(new_order)
+    request_key = normalize_idempotency_key(idempotency_key)
+    effective_key = request_key or make_idempotency_key("manual-order", current_user.id, order.model_dump())
+    existing_order = get_idempotent_order(db, effective_key, current_user.id)
+    if existing_order:
+        return order_payment_response(existing_order)
+
+    try:
+        new_order = models.Order(
+            user_id=current_user.id,
+            user_name=order.user_name,
+            phone_number=order.phone_number,
+            hostel=order.hostel if order.delivery_type == "hostel" else "Day Scholar",
+            delivery_type=order.delivery_type,
+            hostel_name=order.hostel if order.delivery_type == "hostel" else None,
+            contact_number=order.phone_number,
+            alternate_contact_number=order.alternate_number or order.alternate_phone,
+            amount=order.amount,
+            total_amount=order.amount,
+            payment_status="pending_verification",
+            payment_method="UPI",
+            status="pending_verification",
+            idempotency_key=effective_key,
+        )
+        db.add(new_order)
+        db.commit()
+        db.refresh(new_order)
+    except IntegrityError:
+        db.rollback()
+        existing_order = get_idempotent_order(db, effective_key, current_user.id)
+        if existing_order:
+            return order_payment_response(existing_order)
+        raise HTTPException(status_code=409, detail="Duplicate order request")
+    except Exception:
+        db.rollback()
+        logger.exception("manual payment order creation failed user_id=%s", current_user.id)
+        raise HTTPException(status_code=500, detail="Unable to create order")
+
     logger.info("manual payment order created order_id=%s user_id=%s total=%s", new_order.id, current_user.id, new_order.total_amount)
-    return {
-        "order_id": new_order.id,
-        "amount": new_order.amount or new_order.total_amount,
-        "upi_id": UPI_ID,
-        "payment_status": new_order.payment_status,
-    }
+    return order_payment_response(new_order)
 
 
 @app.post("/payment/submit-verification")
@@ -1956,30 +2082,72 @@ def submit_payment_verification(
     payload: schemas.PaymentVerificationCreate,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     utr_number = payload.utr_number.strip()
     transaction_id = payload.transaction_id.strip()
-    order = (
-        db.query(models.Order)
-        .filter(models.Order.id == payload.order_id, models.Order.user_id == current_user.id)
-        .first()
+    verification_key = normalize_idempotency_key(idempotency_key) or make_idempotency_key(
+        "payment-verify",
+        current_user.id,
+        payload.model_dump(),
     )
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
 
-    duplicate_message = _find_duplicate_payment_reference(db, order.id, utr_number, transaction_id)
-    if duplicate_message:
-        _mark_duplicate_payment_attempt(db, order, duplicate_message)
+    try:
+        order = (
+            db.query(models.Order)
+            .filter(models.Order.id == payload.order_id, models.Order.user_id == current_user.id)
+            .first()
+        )
+        if not order:
+            raise HTTPException(status_code=404, detail="Order not found")
 
-    order.utr = utr_number
-    order.utr_number = utr_number
-    order.transaction_id = transaction_id
-    order.payment_status = "pending_verification"
-    order.status = "pending_verification"
-    order.fraud_flag = False
-    order.verification_notes = "Awaiting manual admin verification"
-    db.query(models.CartItem).filter(models.CartItem.user_id == order.user_id).delete()
-    db.commit()
+        same_reference = (
+            (order.utr_number or order.utr or "").strip().lower() == utr_number.lower()
+            and (order.transaction_id or "").strip().lower() == transaction_id.lower()
+        )
+        if same_reference or (verification_key and order.payment_verification_key == verification_key):
+            return {
+                "success": True,
+                "message": "Payment details submitted for verification.",
+                "order_id": order.id,
+            }
+
+        duplicate_message = _find_duplicate_payment_reference(db, order.id, utr_number, transaction_id)
+        if duplicate_message:
+            _mark_duplicate_payment_attempt(db, order, duplicate_message)
+
+        order.utr = utr_number
+        order.utr_number = utr_number
+        order.transaction_id = transaction_id
+        order.payment_verification_key = verification_key
+        order.payment_status = "pending_verification"
+        order.status = "pending_verification"
+        order.fraud_flag = False
+        order.verification_notes = "Awaiting manual admin verification"
+        db.query(models.CartItem).filter(models.CartItem.user_id == order.user_id).delete()
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        order = (
+            db.query(models.Order)
+            .filter(models.Order.id == payload.order_id, models.Order.user_id == current_user.id)
+            .first()
+        )
+        if order and verification_key and order.payment_verification_key == verification_key:
+            return {
+                "success": True,
+                "message": "Payment details submitted for verification.",
+                "order_id": order.id,
+            }
+        raise HTTPException(status_code=409, detail="Duplicate payment verification")
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        logger.exception("payment verification failed order_id=%s user_id=%s", payload.order_id, current_user.id)
+        raise HTTPException(status_code=500, detail="Unable to submit payment verification")
+
     logger.info("payment verification submitted order_id=%s", order.id)
     return {
         "success": True,
@@ -2104,6 +2272,7 @@ def admin_orders(
             joinedload(models.Order.items).joinedload(models.OrderItem.book),
             joinedload(models.Order.items).joinedload(models.OrderItem.upload),
             joinedload(models.Order.user),
+            joinedload(models.Order.batch),
         )
         .order_by(models.Order.created_at.desc())
         .all()
@@ -2122,13 +2291,13 @@ def delivery_orders(
             joinedload(models.Order.items).joinedload(models.OrderItem.book),
             joinedload(models.Order.items).joinedload(models.OrderItem.upload),
             joinedload(models.Order.user),
+            joinedload(models.Order.batch),
         )
-        .filter(models.Order.status.in_(["printing"]))
+        .filter(models.Order.status == "ready_for_delivery")
         .order_by(models.Order.created_at.desc())
         .all()
     )
     return [serialize_delivery_order(order) for order in orders]
-
 
 @app.put("/delivery/orders/{order_id}/delivered")
 def mark_delivery_order_delivered(
@@ -2145,6 +2314,13 @@ def mark_delivery_order_delivered(
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
 
+    if order.status == "delivered":
+        return {"message": "Order marked delivered"}
+
+    if order.status != "ready_for_delivery":
+        raise HTTPException(status_code=409, detail="Order is not ready for delivery")
+
+    order.delivered_at = datetime.now(timezone.utc)
     order.status = "delivered"
     order.payment_status = "delivered"
     db.commit()
@@ -2155,7 +2331,6 @@ def mark_delivery_order_delivered(
         order_id,
     )
     return {"message": "Order marked delivered"}
-
 
 @app.get("/admin/support-threads")
 def admin_support_threads(
@@ -3014,14 +3189,3 @@ def admin_delivered_history(
         .all()
     )
     return [serialize_order(order, include_user=True) for order in orders]
-
-
-
-
-
-
-
-
-
-
-
