@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react"
 import { useNavigate, useParams } from "react-router-dom"
-import { motion, AnimatePresence } from "framer-motion"
+import { motion } from "framer-motion"
 import { 
-  ShieldCheck, Search, Download, Printer, Truck, CheckCircle2, 
+  ShieldCheck, Search, Download, Printer, Truck, CheckCircle2, BookOpen,
   XCircle, Clock, Package, MessageSquare, Image, MoreVertical,
   ChevronRight, ArrowRight, User, Phone, MapPin, Hash, Trash2,
   FileText, ExternalLink, Filter, RefreshCw
@@ -12,12 +12,14 @@ import toast from "react-hot-toast"
 import { isLoggedIn } from "../utils/auth"
 import { getApiErrorMessage } from "../utils/apiError"
 import DeliveryQueue from "../components/DeliveryQueue"
+import BookCatalogManager from "../components/admin/BookCatalogManager"
 
 const ADMIN_TABS = [
   { id: "verification", label: "Verification", icon: ShieldCheck },
   { id: "approved", label: "Approved Queue", icon: Clock },
   { id: "batches", label: "Print Batches", icon: Printer },
   { id: "delivery", label: "Delivery", icon: Truck },
+  { id: "catalog", label: "Books", icon: BookOpen },
   { id: "history", label: "History", icon: Package },
   { id: "support", label: "Support", icon: MessageSquare },
   { id: "banners", label: "Banners", icon: Image },
@@ -29,6 +31,7 @@ const TAB_ALIASES = {
   printing: "approved",
   "print-queue": "batches",
   batch: "batches",
+  books: "catalog",
 }
 
 const normalizeTab = (value, fallback = "verification") => {
@@ -58,8 +61,14 @@ function Admin({ defaultSection = "verification" }) {
   }
   const [orders, setOrders] = useState([])
   const [batches, setBatches] = useState([])
+  const [catalogBooks, setCatalogBooks] = useState([])
+  const [catalogLoaded, setCatalogLoaded] = useState(false)
+  const [catalogLoading, setCatalogLoading] = useState(false)
   const [banners, setBanners] = useState([])
+  const [bannersLoaded, setBannersLoaded] = useState(false)
+  const [bannersLoading, setBannersLoading] = useState(false)
   const [supportThreads, setSupportThreads] = useState([])
+  const [supportLoaded, setSupportLoaded] = useState(false)
   const [activeThread, setActiveThread] = useState(null)
   const [messages, setMessages] = useState([])
   const [newMessage, setNewMessage] = useState("")
@@ -84,16 +93,14 @@ function Admin({ defaultSection = "verification" }) {
       navigate("/login")
       return
     }
-    
+
     try {
       setLoading(true)
       const results = await Promise.allSettled([
         API.get("/admin/orders"),
         API.get("/admin/batches"),
-        API.get("/admin/banners"),
-        API.get("/admin/support-threads")
       ])
-      
+
       if (results[0].status === "fulfilled") setOrders(results[0].value.data || [])
       const batchUnavailable = [404, 405].includes(results[1].reason?.response?.status)
       if (results[1].status === "fulfilled") {
@@ -103,27 +110,69 @@ function Admin({ defaultSection = "verification" }) {
         setBatchApiUnavailable(true)
         setBatches([])
       }
-      if (results[2].status === "fulfilled") setBanners(results[2].value.data || [])
-      if (results[3].status === "fulfilled") setSupportThreads(results[3].value.data || [])
-      
-      const failed = results.filter(r => r.status === "rejected")
-      if (failed.length > 0) {
-        console.error("Some admin data failed to load", failed)
-        if (batchUnavailable && failed.every((result) => [404, 405].includes(result.reason?.response?.status))) {
-          return
-        }
-        toast.error("Partial data load: some sections may be empty")
+
+      const failed = results.filter((result) => result.status === "rejected")
+      if (failed.length > 0 && !(batchUnavailable && failed.length === 1)) {
+        toast.error("Some workflow data could not be loaded")
       }
-    } catch (err) {
-      toast.error(getApiErrorMessage(err, "Failed to load admin data"))
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, "Failed to load admin data"))
     } finally {
       setLoading(false)
     }
   }, [navigate])
 
+  const fetchCatalogBooks = useCallback(async (force = false) => {
+    if (catalogLoading || (!force && catalogLoaded)) return
+
+    try {
+      setCatalogLoading(true)
+      const response = await API.get("/admin/books", { cache: false })
+      setCatalogBooks(Array.isArray(response.data) ? response.data : [])
+      setCatalogLoaded(true)
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, "Failed to load book catalogue"))
+    } finally {
+      setCatalogLoading(false)
+    }
+  }, [catalogLoaded, catalogLoading])
+
+  const fetchBanners = useCallback(async (force = false) => {
+    if (bannersLoading || (!force && bannersLoaded)) return
+
+    try {
+      setBannersLoading(true)
+      const response = await API.get("/admin/banners", { cache: false })
+      setBanners(Array.isArray(response.data) ? response.data : [])
+      setBannersLoaded(true)
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, "Failed to load banners"))
+    } finally {
+      setBannersLoading(false)
+    }
+  }, [bannersLoaded, bannersLoading])
+
+  const fetchSupportThreads = useCallback(async (force = false) => {
+    if (!force && supportLoaded) return
+
+    try {
+      const response = await API.get("/admin/support-threads", { cache: false })
+      setSupportThreads(Array.isArray(response.data) ? response.data : [])
+      setSupportLoaded(true)
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, "Failed to load support threads"))
+    }
+  }, [supportLoaded])
+
   useEffect(() => {
     fetchData()
   }, [fetchData])
+
+  useEffect(() => {
+    if (activeTab === "catalog") fetchCatalogBooks()
+    if (activeTab === "banners") fetchBanners()
+    if (activeTab === "support") fetchSupportThreads()
+  }, [activeTab, fetchBanners, fetchCatalogBooks, fetchSupportThreads])
 
   useEffect(() => {
     if (activeThread) {
@@ -426,7 +475,7 @@ function Admin({ defaultSection = "verification" }) {
         </div>
 
         {/* Content */}
-        <AnimatePresence mode="wait">
+        <div>
           {loading ? (
             <motion.div 
               key="loading"
@@ -438,12 +487,8 @@ function Admin({ defaultSection = "verification" }) {
               ))}
             </motion.div>
           ) : (
-            <motion.div
-              key={activeTab}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.3 }}
-            >
+            <div>
+
               {(activeTab === "verification") && (
                 <div className="grid gap-4">
                   {filteredVerification.length === 0 ? (
@@ -479,6 +524,27 @@ function Admin({ defaultSection = "verification" }) {
                                 <p className="text-2xl font-black text-yellow-400">{formatAmount(order.total_amount)}</p>
                               </div>
                             </div>
+                            {order.items?.some((item) => item.item_type === "pdf" || item.stored_filename) && (
+                              <div className="mt-4 flex flex-wrap gap-2">
+                                {order.items.filter((item) => item.item_type === "pdf" || item.stored_filename).map((item) => (
+                                  item.stored_filename ? (
+                                    <a
+                                      key={item.id}
+                                      href={`${API_BASE_URL}/uploads/${item.stored_filename}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="rounded-lg border border-blue-400/20 bg-blue-400/10 px-2.5 py-1 text-xs font-medium text-blue-200 transition hover:bg-blue-400 hover:text-black"
+                                    >
+                                      Custom PDF: {item.original_filename || item.item_name || "Unnamed file"}
+                                    </a>
+                                  ) : (
+                                    <span key={item.id} className="rounded-lg border border-blue-400/20 bg-blue-400/10 px-2.5 py-1 text-xs font-medium text-blue-200">
+                                      Custom PDF: {item.original_filename || item.item_name || "Unnamed file"}
+                                    </span>
+                                  )
+                                ))}
+                              </div>
+                            )}
                           </div>
                           <div className="flex items-center gap-3 border-t lg:border-t-0 lg:border-l border-white/5 pt-4 lg:pt-0 lg:pl-6">
                             <button 
@@ -651,6 +717,14 @@ function Admin({ defaultSection = "verification" }) {
                 </div>
               )}
 
+              {activeTab === "catalog" && (
+                <BookCatalogManager
+                  books={catalogBooks}
+                  loading={catalogLoading}
+                  query={search}
+                  onRefresh={fetchCatalogBooks}
+                />
+              )}
               {activeTab === "delivery" && (
                 <DeliveryQueue
                   orders={readyForDelivery}
@@ -844,7 +918,7 @@ function Admin({ defaultSection = "verification" }) {
                                 }
                                 setEditingBannerId(null)
                                 setBannerForm({ title: "", subtitle: "", link: "", clickable: false, active: true, image: null })
-                                fetchData()
+                                fetchBanners(true)
                               } catch (err) {
                                 toast.error(getApiErrorMessage(err))
                               } finally {
@@ -912,7 +986,7 @@ function Admin({ defaultSection = "verification" }) {
                               try {
                                 await API.delete(`/admin/banners/${banner.id}`)
                                 toast.success("Banner deleted")
-                                fetchData()
+                                fetchBanners(true)
                               } catch {
                                 toast.error("Failed to delete")
                               }
@@ -927,9 +1001,10 @@ function Admin({ defaultSection = "verification" }) {
                   </div>
                 </div>
               )}
-            </motion.div>
+            </div>
           )}
-        </AnimatePresence>
+        </div>
+
       </div>
 
       {/* Batch Detail Modal */}

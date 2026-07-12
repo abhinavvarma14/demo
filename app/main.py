@@ -48,7 +48,8 @@ login_attempts: dict[str, list[float]] = {}
 PDF_SINGLE_PRICE_PER_PAGE = 1.25
 PDF_SINGLE_BASE_CHARGE = 65.0
 PDF_DOUBLE_PRICE_PER_PAGE = 1.25
-PDF_DOUBLE_BASE_CHARGE = 65.0
+PDF_DOUBLE_BASE_CHARGE = 60.0
+PDF_DOUBLE_PAGE_DIVISOR = 1.8
 UPI_ID = "9052612456-3@ybl"
 
 def get_required_env(name: str) -> str:
@@ -365,7 +366,7 @@ def normalize_print_type(value: str | None):
 
 def validate_mode_or_raise(value: str | None):
     normalized = normalize_mode(value)
-    if normalized not in {"black_white", "color"}:
+    if not normalized:
         raise HTTPException(status_code=400, detail="Mode is required")
     return normalized
 
@@ -395,7 +396,8 @@ def get_pdf_pricing_values(print_type: str | None):
 def calculate_pdf_total(total_pages: int, print_type: str | None = None) -> float:
     pricing = get_pdf_pricing_values(print_type)
     if pricing["print_type"] == "double":
-        return ((total_pages / 2) * pricing["price_per_page"]) + pricing["base_charge"]
+        # Custom double-sided printing is charged by the requested sheet formula.
+        return round((total_pages / PDF_DOUBLE_PAGE_DIVISOR) * PDF_DOUBLE_PRICE_PER_PAGE + PDF_DOUBLE_BASE_CHARGE, 2)
     return (total_pages * pricing["price_per_page"]) + pricing["base_charge"]
 
 
@@ -664,6 +666,7 @@ def serialize_book(book: models.Book):
             "mode": option.mode,
             "print_type": option.print_type,
             "price": option.price,
+            "max_copies": option.max_copies,
         }
         for option in book.options
     ]
@@ -692,10 +695,19 @@ def serialize_admin_book(book: models.Book):
                 "mode": option.mode,
                 "print_type": option.print_type,
                 "price": option.price,
+                "max_copies": option.max_copies,
             }
             for option in book.options
         ],
     }
+
+
+def is_custom_pdf_item(item: models.OrderItem) -> bool:
+    return item.item_type == "pdf" or bool(item.stored_filename)
+
+
+def order_item_file_name(item: models.OrderItem) -> str:
+    return item.original_filename or item.item_name or "Custom PDF"
 
 
 def serialize_banner(banner: models.Banner):
@@ -1089,6 +1101,7 @@ def get_book_options(book_id: int, db: Session = Depends(get_db)):
             "mode": option.mode,
             "print_type": option.print_type,
             "price": option.price,
+            "max_copies": option.max_copies,
         }
         for option in options
     ]
@@ -1163,11 +1176,20 @@ def delete_book(
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
 
+    has_existing_references = (
+        db.query(models.CartItem.id).filter(models.CartItem.book_id == book_id).first()
+        or db.query(models.OrderItem.id).filter(models.OrderItem.book_id == book_id).first()
+    )
+    if has_existing_references:
+        book.is_active = False
+        db.commit()
+        logger.info("admin archived referenced book admin_id=%s book_id=%s", current_user.id, book_id)
+        return {"message": "Book archived because it is used in existing orders", "archived": True}
+
     db.delete(book)
     db.commit()
     logger.info("admin deleted book admin_id=%s book_id=%s", current_user.id, book_id)
-    return {"message": "Book deleted"}
-
+    return {"message": "Book deleted", "archived": False}
 
 @app.get("/api/banners")
 def get_banners(
@@ -1318,6 +1340,7 @@ def create_book_option(
         "mode": option.mode,
         "print_type": option.print_type,
         "price": option.price,
+        "max_copies": option.max_copies,
     }
 
 
@@ -1352,6 +1375,7 @@ def update_book_option_admin(
         "mode": option.mode,
         "print_type": option.print_type,
         "price": option.price,
+        "max_copies": option.max_copies,
     }
 
 
@@ -2668,28 +2692,35 @@ def admin_payment_verification_excel(
 ):
     orders = (
         db.query(models.Order)
+        .options(joinedload(models.Order.items), joinedload(models.Order.user))
         .filter(or_(models.Order.utr.is_not(None), models.Order.utr_number.is_not(None)))
         .order_by(models.Order.created_at.desc())
         .all()
     )
-    rows = [
-        [
+    rows = []
+    for order in orders:
+        custom_files = [order_item_file_name(item) for item in order.items if is_custom_pdf_item(item)]
+        item_details = "; ".join(
+            f"{'Custom PDF' if is_custom_pdf_item(item) else 'Book'}: {order_item_file_name(item) if is_custom_pdf_item(item) else item.item_name or 'Unnamed item'} x{item.quantity}"
+            for item in order.items
+        )
+        rows.append([
             order.user_name or (order.user.username if order.user else ""),
             order.phone_number or order.contact_number,
             round(float(order.amount or order.total_amount or 0)),
             order.utr_number or order.utr or "",
             order.transaction_id or "",
             order.payment_status or order.status,
-        ]
-        for order in orders
-    ]
+            item_details,
+            "; ".join(custom_files),
+        ])
+
     logger.info("admin exported payment verification excel admin_id=%s rows=%s", current_user.id, len(rows))
     return build_excel_response(
         "payment-verification.xlsx",
-        ["Name", "Phone", "Amount", "UTR", "Transaction ID", "Status"],
+        ["Name", "Phone", "Amount", "UTR", "Transaction ID", "Status", "Items", "Custom PDF File Names"],
         rows,
     )
-
 
 @app.get("/admin/printing-excel")
 def admin_printing_excel(
@@ -2698,32 +2729,32 @@ def admin_printing_excel(
 ):
     orders = (
         db.query(models.Order)
-        .options(joinedload(models.Order.items))
+        .options(joinedload(models.Order.items), joinedload(models.Order.user))
         .filter(models.Order.status.in_(["approved", "printing"]))
         .order_by(models.Order.created_at.desc())
         .all()
     )
     rows = []
     for order in orders:
+        custom_files = [order_item_file_name(item) for item in order.items if is_custom_pdf_item(item)]
         details = "; ".join(
-            f"{item.item_name or 'Unnamed item'} x{item.quantity} ({item.mode or '-'}, {item.print_type or '-'})"
+            f"{'Custom PDF' if is_custom_pdf_item(item) else 'Book'}: {order_item_file_name(item) if is_custom_pdf_item(item) else item.item_name or 'Unnamed item'} x{item.quantity} ({item.mode or '-'}, {item.print_type or '-'})"
             for item in order.items
         )
-        rows.append(
-            [
-                order.user_name or (order.user.username if order.user else ""),
-                order.hostel or order.hostel_name or "",
-                order.delivery_type,
-                details,
-            ]
-        )
+        rows.append([
+            order.user_name or (order.user.username if order.user else ""),
+            order.hostel or order.hostel_name or "",
+            order.delivery_type,
+            details,
+            "; ".join(custom_files),
+        ])
+
     logger.info("admin exported printing excel admin_id=%s rows=%s", current_user.id, len(rows))
     return build_excel_response(
         "printing-queue.xlsx",
-        ["Name", "Hostel", "Delivery Type", "Order Details"],
+        ["Name", "Hostel", "Delivery Type", "Order Details", "Custom PDF File Names"],
         rows,
     )
-
 
 @app.get("/admin/print-summary")
 def admin_print_summary(
@@ -2986,6 +3017,7 @@ def get_batch_detail(
                     "order_id": order.id,
                     "user_name": order.user_name or (order.user.username if order.user else ""),
                     "item_name": item.item_name or item.original_filename or "Custom",
+                    "original_filename": item.original_filename,
                     "total_pages": item.total_pages,
                     "mode": item.mode,
                     "print_type": item.print_type,
@@ -3092,37 +3124,48 @@ def batch_printing_excel(
 
     orders = (
         db.query(models.Order)
-        .options(joinedload(models.Order.items))
+        .options(joinedload(models.Order.items), joinedload(models.Order.user))
         .filter(models.Order.batch_ref_id == batch.id)
         .all()
     )
 
-    # Consolidated printing instructions
-    groups = {}
+    standard_groups = {}
+    custom_rows = []
     for order in orders:
         for item in order.items:
-            if item.item_type == "pdf" or item.stored_filename:
+            if is_custom_pdf_item(item):
+                file_name = order_item_file_name(item)
+                custom_rows.append([
+                    "Custom PDF",
+                    file_name,
+                    file_name,
+                    item.total_pages or "",
+                    item.mode or "-",
+                    item.print_type or "-",
+                    item.quantity,
+                    order.user_name or (order.user.username if order.user else ""),
+                ])
                 continue
+
             group_key = f"{item.item_name}|{item.mode or '-'}|{item.print_type or '-'}"
-            if group_key not in groups:
-                groups[group_key] = {
+            if group_key not in standard_groups:
+                standard_groups[group_key] = {
                     "name": item.item_name or "Unnamed",
                     "mode": item.mode or "-",
                     "print_type": item.print_type or "-",
                     "qty": 0,
                 }
-            groups[group_key]["qty"] += item.quantity
+            standard_groups[group_key]["qty"] += item.quantity
 
-    rows = [
-        [g["name"], g["mode"], g["print_type"], g["qty"]]
-        for g in groups.values()
+    standard_rows = [
+        ["Book", group["name"], "", "", group["mode"], group["print_type"], group["qty"], ""]
+        for group in standard_groups.values()
     ]
     return build_excel_response(
         f"{batch.batch_id}-printing.xlsx",
-        ["Book Name", "Mode", "Print Type", "Total Quantity"],
-        rows,
+        ["Item Type", "Book / File Name", "Original File Name", "Pages", "Mode", "Print Type", "Total Quantity", "Customer"],
+        [*standard_rows, *custom_rows],
     )
-
 
 @app.get("/admin/batches/{batch_id}/delivery-excel")
 def batch_delivery_excel(
@@ -3145,20 +3188,26 @@ def batch_delivery_excel(
     rows = []
     for order in orders:
         item_details = []
-        book_types = []
+        item_types = []
         print_types = []
+        custom_files = []
         for item in order.items:
-            item_type = item.item_type or ("Custom Upload" if item.stored_filename else "Book")
+            is_custom = is_custom_pdf_item(item)
+            item_type = "Custom PDF" if is_custom else (item.item_type or "Book")
+            item_name = order_item_file_name(item) if is_custom else (item.item_name or "Item")
+            if is_custom:
+                custom_files.append(item_name)
             mode = item.mode or "-"
             print_type = item.print_type or "-"
-            item_details.append(f"{item.item_name or 'Item'} x{item.quantity} ({item_type}, {mode}, {print_type})")
-            book_types.append(item_type)
+            item_details.append(f"{item_name} x{item.quantity} ({item_type}, {mode}, {print_type})")
+            item_types.append(item_type)
             print_types.append(f"{mode} / {print_type}")
 
         rows.append([
             order.user_name or (order.user.username if order.user else ""),
             "; ".join(item_details),
-            "; ".join(dict.fromkeys(book_types)) or "-",
+            "; ".join(dict.fromkeys(item_types)) or "-",
+            "; ".join(dict.fromkeys(custom_files)) or "-",
             "; ".join(dict.fromkeys(print_types)) or "-",
             order.hostel or order.hostel_name or "-",
             order.delivery_type or "-",
@@ -3168,10 +3217,9 @@ def batch_delivery_excel(
 
     return build_excel_response(
         f"{batch.batch_id}-delivery.xlsx",
-        ["Name", "Items", "Book Type", "Print / Mode", "Hostel", "Delivery Type", "Phone", "Alt Phone"],
+        ["Name", "Items", "Item Type", "Custom PDF File Names", "Print / Mode", "Hostel", "Delivery Type", "Phone", "Alt Phone"],
         rows,
     )
-
 
 @app.get("/admin/delivered-history")
 def admin_delivered_history(

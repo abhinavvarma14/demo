@@ -1,4 +1,5 @@
 import importlib
+from io import BytesIO
 import os
 import sys
 import tempfile
@@ -6,6 +7,29 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from xml.etree import ElementTree
+from zipfile import ZipFile
+
+
+XLSX_NAMESPACE = {"sheet": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+
+
+def read_xlsx_rows(content: bytes):
+    with ZipFile(BytesIO(content)) as archive:
+        document = ElementTree.fromstring(archive.read("xl/worksheets/sheet1.xml"))
+
+    rows = []
+    for row in document.findall(".//sheet:sheetData/sheet:row", XLSX_NAMESPACE):
+        values = []
+        for cell in row.findall("sheet:c", XLSX_NAMESPACE):
+            inline_text = cell.find("sheet:is/sheet:t", XLSX_NAMESPACE)
+            if inline_text is not None:
+                values.append(inline_text.text or "")
+                continue
+            value = cell.find("sheet:v", XLSX_NAMESPACE)
+            values.append(value.text if value is not None else "")
+        rows.append(tuple(values))
+    return rows
 
 
 TEST_DB_PATH = Path(tempfile.gettempdir()) / "batprint_test.sqlite3"
@@ -702,6 +726,149 @@ def test_pdf_upload_cart_and_admin_download_flow(client, app_module):
     assert admin_orders[0]["items"][0]["stored_filename"] == upload_payload["stored_filename"]
     assert admin_orders[0]["items"][0]["original_filename"] == "notes.pdf"
 
+
+def test_admin_book_crud_includes_pricing_options(client, app_module):
+    create_admin(app_module)
+    admin_token = login(client, username="adminuser").json()["access_token"]
+
+    created_response = client.post(
+        "/admin/books",
+        json={"name": "Catalogue Test", "year": "Y27", "is_pinned": True},
+        headers=auth_headers(admin_token),
+    )
+    assert created_response.status_code == 200
+    book_id = created_response.json()["id"]
+
+    option_response = client.post(
+        "/admin/book-options",
+        json={
+            "book_id": book_id,
+            "mode": "a",
+            "print_type": "double",
+            "price": 72.5,
+            "max_copies": 8,
+        },
+        headers=auth_headers(admin_token),
+    )
+    assert option_response.status_code == 200
+    option_id = option_response.json()["id"]
+    assert option_response.json()["mode"] == "a"
+    assert option_response.json()["max_copies"] == 8
+
+    catalogue_response = client.get("/admin/books", headers=auth_headers(admin_token))
+    assert catalogue_response.status_code == 200
+    catalogue_book = next(book for book in catalogue_response.json() if book["id"] == book_id)
+    assert catalogue_book["is_pinned"] is True
+    assert catalogue_book["options"][0]["mode"] == "a"
+    assert catalogue_book["options"][0]["max_copies"] == 8
+
+    update_response = client.put(
+        f"/admin/books/{book_id}",
+        json={"name": "Catalogue Test Updated", "year": "Y28", "is_active": False},
+        headers=auth_headers(admin_token),
+    )
+    assert update_response.status_code == 200
+    assert update_response.json()["name"] == "Catalogue Test Updated"
+    assert update_response.json()["is_active"] is False
+
+    option_update_response = client.put(
+        f"/admin/book-options/{option_id}",
+        json={"price": 80, "max_copies": 10},
+        headers=auth_headers(admin_token),
+    )
+    assert option_update_response.status_code == 200
+    assert option_update_response.json()["price"] == 80
+    assert option_update_response.json()["max_copies"] == 10
+
+    delete_response = client.delete(f"/admin/books/{book_id}", headers=auth_headers(admin_token))
+    assert delete_response.status_code == 200
+    assert delete_response.json()["archived"] is False
+    remaining_books = client.get("/admin/books", headers=auth_headers(admin_token)).json()
+    assert all(book["id"] != book_id for book in remaining_books)
+
+
+def test_custom_pdf_double_price_and_batch_excel_include_filename(client, app_module):
+    signup(client, username="custombuyer")
+    buyer_token = login(client, username="custombuyer").json()["access_token"]
+    pdf_bytes = b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF"
+
+    quote_response = client.get("/pricing/pdf?total_pages=60&print_type=double")
+    assert quote_response.status_code == 200
+    assert quote_response.json()["total_price"] == 101.67
+
+    upload_response = client.post(
+        "/api/uploads/pdf",
+        data={"total_pages": "60", "print_type": "double", "quantity": "1"},
+        files={"file": ("custom-notes.pdf", pdf_bytes, "application/pdf")},
+        headers=auth_headers(buyer_token),
+    )
+    assert upload_response.status_code == 200
+    upload_payload = upload_response.json()
+    assert upload_payload["calculated_price"] == 101.67
+    assert upload_payload["original_filename"] == "custom-notes.pdf"
+
+    cart_response = client.post(
+        "/cart/items",
+        json={
+            "item_type": "pdf",
+            "upload_id": upload_payload["id"],
+            "stored_filename": upload_payload["stored_filename"],
+            "total_pages": 60,
+            "print_type": "double",
+            "quantity": 1,
+        },
+        headers=auth_headers(buyer_token),
+    )
+    assert cart_response.status_code == 200
+
+    order_response = client.post(
+        "/orders",
+        json={
+            "delivery_type": "hostel",
+            "hostel_name": "Himalaya",
+            "contact_number": "9876543210",
+            "alternate_contact_number": "",
+        },
+        headers=auth_headers(buyer_token),
+    )
+    assert order_response.status_code == 200
+    order_id = order_response.json()["order_id"]
+
+    create_admin(app_module)
+    admin_token = login(client, username="adminuser").json()["access_token"]
+    assert client.put(
+        f"/admin/orders/{order_id}/status?status=approved",
+        headers=auth_headers(admin_token),
+    ).status_code == 200
+
+    batch_response = client.post(
+        "/admin/batches",
+        json={"order_ids": [order_id]},
+        headers=auth_headers(admin_token),
+    )
+    assert batch_response.status_code == 200
+    batch_id = batch_response.json()["id"]
+
+    printing_export = client.get(
+        f"/admin/batches/{batch_id}/printing-excel",
+        headers=auth_headers(admin_token),
+    )
+    assert printing_export.status_code == 200
+    printing_rows = read_xlsx_rows(printing_export.content)
+    assert "Original File Name" in printing_rows[0]
+    custom_print_row = next(row for row in printing_rows[1:] if row[0] == "Custom PDF")
+    assert custom_print_row[1] == "custom-notes.pdf"
+    assert custom_print_row[2] == "custom-notes.pdf"
+    assert custom_print_row[5] == "double"
+
+    delivery_export = client.get(
+        f"/admin/batches/{batch_id}/delivery-excel",
+        headers=auth_headers(admin_token),
+    )
+    assert delivery_export.status_code == 200
+    delivery_rows = read_xlsx_rows(delivery_export.content)
+    assert "Custom PDF File Names" in delivery_rows[0]
+    assert delivery_rows[1][3] == "custom-notes.pdf"
 
 def test_legacy_plaintext_password_is_upgraded_on_login(client, app_module):
     db = app_module.SessionLocal()
