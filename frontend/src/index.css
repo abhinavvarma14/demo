@@ -1273,7 +1273,7 @@ button:disabled {
 .batprint-intro-shell .brandTitle {
   margin: 0;
   color: transparent;
- font-family:"Parisienne",cursive;
+ font-family: Arial, sans-serif;
   font-size: clamp(50px, 9vw, 82px);
   font-weight: 400;
   line-height: 1;
