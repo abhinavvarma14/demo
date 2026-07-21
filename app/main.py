@@ -50,7 +50,7 @@ PDF_SINGLE_BASE_CHARGE = 65.0
 PDF_DOUBLE_PRICE_PER_PAGE = 1.25
 PDF_DOUBLE_BASE_CHARGE = 60.0
 PDF_DOUBLE_PAGE_DIVISOR = 1.8
-UPI_ID = "9052612456-3@ybl"
+UPI_ID = "9966030017@ybl"
 
 def get_required_env(name: str) -> str:
     value = os.getenv(name)

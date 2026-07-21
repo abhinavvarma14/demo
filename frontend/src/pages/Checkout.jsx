@@ -9,7 +9,7 @@ import LoadingButton from "../components/LoadingButton"
 import { isLoggedIn } from "../utils/auth"
 import { getApiErrorMessage } from "../utils/apiError"
 
-const UPI_ID = "9052612456-3@ybl"
+const UPI_ID = "9966030017@ybl"
 const hostelOptions = ["Himalaya", "Lotus", "Tulip", "Aravali", "Vindhya", "Kailash", "Outside Hostel"]
 const CHECKOUT_FORM_KEY = "batprint.checkout.form"
 const CHECKOUT_ORDER_KEY = "batprint.checkout.orderKey"
