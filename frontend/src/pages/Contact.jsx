@@ -19,6 +19,12 @@ function Contact() {
             <span className="font-semibold text-white">Email:</span>{" "}
             batprint6@gmail.com
           </p>
+          <p>
+            <span className="font-semibold text-white">Phone:</span>{" "}
+            <a className="hover:text-yellow-400 transition" href="tel:9966030017">
+              9966030017
+            </a>
+          </p>
         </div>
 
         <p>We strive to respond to all inquiries within 24–48 business hours.</p>

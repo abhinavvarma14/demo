@@ -22,7 +22,9 @@ function Footer() {
           </Link>
         </div>
 
-        <div className="mt-3 space-y-1">
+        <div className="mt-3 space-y-1">          <p>
+            Contact: <a className="hover:text-yellow-400 transition" href="tel:9966030017">9966030017</a>
+          </p>
           <p>© 2026 Batprint. All rights reserved.</p>
         </div>
       </div>

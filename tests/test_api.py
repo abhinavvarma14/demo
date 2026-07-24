@@ -794,7 +794,11 @@ def test_custom_pdf_double_price_and_batch_excel_include_filename(client, app_mo
 
     quote_response = client.get("/pricing/pdf?total_pages=60&print_type=double")
     assert quote_response.status_code == 200
-    assert quote_response.json()["total_price"] == 101.67
+    assert quote_response.json()["total_price"] == 90.0
+
+    single_quote_response = client.get("/pricing/pdf?total_pages=60&print_type=single")
+    assert single_quote_response.status_code == 200
+    assert single_quote_response.json()["total_price"] == 120.0
 
     upload_response = client.post(
         "/api/uploads/pdf",
@@ -804,7 +808,7 @@ def test_custom_pdf_double_price_and_batch_excel_include_filename(client, app_mo
     )
     assert upload_response.status_code == 200
     upload_payload = upload_response.json()
-    assert upload_payload["calculated_price"] == 101.67
+    assert upload_payload["calculated_price"] == 90.0
     assert upload_payload["original_filename"] == "custom-notes.pdf"
 
     cart_response = client.post(
