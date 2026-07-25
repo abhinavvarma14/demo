@@ -13,6 +13,15 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   import.meta.url
 ).toString()
 
+const calculatePdfPrice = (totalPages, selectedPrintType) => {
+  const pageCount = Number(totalPages || 0)
+  if (pageCount <= 0) return 0
+
+  return selectedPrintType === "double"
+    ? pageCount / 2 + 60
+    : pageCount * 1 + 60
+}
+
 function Upload() {
   const navigate = useNavigate()
   const [file, setFile] = useState(null)
@@ -22,35 +31,14 @@ function Upload() {
   const [printType, setPrintType] = useState("single")
   const [uploadedState, setUploadedState] = useState(false)
   const [price, setPrice] = useState(0)
-  const [loadingPrice, setLoadingPrice] = useState(false)
 
   useEffect(() => {
-    const fetchPricing = async () => {
-      if (!file || pages <= 0) {
-        setPrice(0)
-        return
-      }
-
-      try {
-        setLoadingPrice(true)
-        const res = await API.get("/pricing/pdf", {
-          params: {
-            total_pages: pages,
-            print_type: printType,
-            copies: 1,
-          },
-        })
-        setPrice(Number(res.data.total_price || 0))
-      } catch (error) {
-        console.log(error)
-        setPrice(0)
-        toast.error(getApiErrorMessage(error, "Unable to fetch price"))
-      } finally {
-        setLoadingPrice(false)
-      }
+    if (!file || pages <= 0) {
+      setPrice(0)
+      return
     }
 
-    fetchPricing()
+    setPrice(calculatePdfPrice(pages, printType))
   }, [file, pages, printType])
 
   const onDrop = async (acceptedFiles) => {
@@ -252,10 +240,9 @@ function Upload() {
         </p>
 
         <p className="text-2xl font-bold text-yellow-400">
-          {loadingPrice ? "Calculating..." : `₹${price.toFixed(2)}`}
+        {price.toFixed(2)}
         </p>
       </div>
-
       <button
         onClick={addToCart}
         disabled={submitting}
